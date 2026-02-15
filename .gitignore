@@ -10,4 +10,5 @@ build/
 coverage/
 *.log
 web/i18n/
+web/config.js
 .wrangler/

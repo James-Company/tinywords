@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "tsx server/src/main.ts",
     "dev:cf": "wrangler pages dev web",
-    "build": "mkdir -p web/i18n && cp src/i18n/locales/*.json web/i18n/",
+    "build": "mkdir -p web/i18n && cp src/i18n/locales/*.json web/i18n/ && node scripts/generate-config.mjs",
     "deploy": "npm run build && wrangler pages deploy web",
     "test": "tsx tests/run.ts",
     "typecheck": "tsc --noEmit"
