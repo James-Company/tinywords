@@ -2128,21 +2128,11 @@ async function onSignedIn() {
   renderHeader();
   updateTabLabels();
 
-  // 홈에 로딩 표시
-  const homeEl = document.getElementById("home");
-  if (homeEl) {
-    homeEl.innerHTML = `
-      <div class="loading-state">
-        <div class="loading-spinner"></div>
-        <p>잠시만요...</p>
-      </div>
-    `;
-  }
-
   // 빠른 데이터만 로드 (프로필 + 히스토리, AI 호출 없음)
   await loadDashboardData();
 
-  renderAll();
+  // 복원된 탭으로 전환 (데이터 로딩 + 렌더링 포함)
+  setTab(state.activeTab);
 }
 
 async function main() {
