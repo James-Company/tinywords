@@ -33,6 +33,7 @@ export function registerUserRoutes() {
       learning_focus: data.learning_focus,
       reminder_enabled: data.reminder_enabled,
       speech_required_for_completion: data.speech_required_for_completion,
+      created_at: data.created_at,
       updated_at: data.updated_at,
     });
   }

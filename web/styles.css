@@ -1269,3 +1269,103 @@ select {
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+/* ─── Home Dashboard ─── */
+.home-greeting {
+  text-align: center;
+  padding: var(--space-24) var(--space-16) var(--space-16);
+}
+.home-greeting .greeting-emoji {
+  font-size: 40px;
+  margin-bottom: var(--space-8);
+}
+.home-greeting h2 {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 var(--space-4);
+}
+.home-greeting p {
+  color: var(--text-secondary);
+  font-size: 14px;
+  margin: 0;
+}
+
+.home-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-12);
+  padding: 0 var(--space-4);
+  margin-bottom: var(--space-20);
+}
+
+.home-stat-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--line-default);
+  border-radius: var(--radius-12);
+  padding: var(--space-16);
+  text-align: center;
+  box-shadow: var(--shadow-card);
+}
+.home-stat-card .stat-icon {
+  font-size: 24px;
+  margin-bottom: var(--space-4);
+}
+.home-stat-card .stat-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+.home-stat-card .stat-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: var(--space-4);
+}
+
+.home-stat-card.highlight {
+  background: var(--brand-soft);
+  border-color: var(--brand-primary);
+}
+
+.home-actions {
+  padding: 0 var(--space-4);
+  margin-bottom: var(--space-20);
+}
+.home-actions .btn {
+  width: 100%;
+  padding: var(--space-16);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.home-tip {
+  text-align: center;
+  padding: var(--space-16);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-style: italic;
+}
+
+/* ─── Loading State ─── */
+.loading-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-32) var(--space-16);
+  min-height: 200px;
+}
+.loading-state .loading-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin-bottom: var(--space-16);
+}
+.loading-state p {
+  color: var(--text-secondary);
+  font-size: 15px;
+}

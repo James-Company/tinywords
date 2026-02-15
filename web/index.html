@@ -132,13 +132,15 @@
       </header>
 
       <nav class="tabs" role="tablist">
-        <button data-tab="today" class="tab active" role="tab" aria-selected="true">Today</button>
+        <button data-tab="home" class="tab active" role="tab" aria-selected="true">홈</button>
+        <button data-tab="today" class="tab" role="tab" aria-selected="false">Today</button>
         <button data-tab="inbox" class="tab" role="tab" aria-selected="false">Inbox</button>
         <button data-tab="history" class="tab" role="tab" aria-selected="false">History</button>
         <button data-tab="settings" class="tab" role="tab" aria-selected="false">Settings</button>
       </nav>
 
-      <section id="today" class="panel" role="tabpanel"></section>
+      <section id="home" class="panel" role="tabpanel"></section>
+      <section id="today" class="panel hidden" role="tabpanel"></section>
       <section id="inbox" class="panel hidden" role="tabpanel"></section>
       <section id="history" class="panel hidden" role="tabpanel"></section>
       <section id="settings" class="panel hidden" role="tabpanel"></section>

@@ -169,6 +169,7 @@ function setTab(tabId) {
   });
 
   // Refresh data when switching tabs
+  if (tabId === "today") loadTodayData();
   if (tabId === "inbox") refreshInbox();
   if (tabId === "history") refreshHistory();
   if (tabId === "settings") refreshSettings();
@@ -183,20 +184,49 @@ function updateTabLabels() {
 }
 
 // ─── Data Loading ───
-async function loadData() {
+
+/** 빠른 데이터만 로드 (프로필 + 스트릭/히스토리) — AI 호출 없음 */
+async function loadDashboardData() {
   try {
-    const [profile, planRes, queueRes] = await Promise.all([
+    const [profile, history] = await Promise.all([
       api("/api/v1/users/me/profile"),
-      api("/api/v1/day-plans/today?create_if_missing=true"),
-      api("/api/v1/reviews/queue"),
+      api("/api/v1/history?type=all").catch(() => null),
     ]);
     state.profile = profile;
-    state.plan = planRes;
-    state.reviews = queueRes.tasks || [];
+    if (history) state.history = history;
     hideError();
   } catch (err) {
     showError(t("errors.load_data") + " " + err.message);
     throw err;
+  }
+}
+
+/** Today 탭 전용: day plan + reviews 로드 (AI 단어 생성 포함, 느릴 수 있음) */
+let todayLoaded = false;
+async function loadTodayData() {
+  if (todayLoaded && state.plan) return; // 이미 로드됨
+
+  const todayEl = document.getElementById("today");
+  if (todayEl && !state.plan) {
+    todayEl.innerHTML = `
+      <div class="loading-state">
+        <div class="loading-spinner"></div>
+        <p>오늘의 학습을 준비하고 있어요...</p>
+      </div>
+    `;
+  }
+
+  try {
+    const [planRes, queueRes] = await Promise.all([
+      api("/api/v1/day-plans/today?create_if_missing=true"),
+      api("/api/v1/reviews/queue"),
+    ]);
+    state.plan = planRes;
+    state.reviews = queueRes.tasks || [];
+    todayLoaded = true;
+    renderToday();
+  } catch (err) {
+    showError(t("errors.load_data") + " " + err.message);
   }
 }
 
@@ -1127,11 +1157,102 @@ function renderHeader() {
 }
 
 // ─── Render All ───
+// ─── Home Dashboard (docs/05) ───
+
+function getGreeting() {
+  const h = new Date().getHours();
+  if (h < 6) return { emoji: "🌙", text: "늦은 밤에도 학습하시는군요!" };
+  if (h < 12) return { emoji: "☀️", text: "좋은 아침이에요!" };
+  if (h < 18) return { emoji: "🌤️", text: "오늘도 한 걸음 더!" };
+  return { emoji: "🌙", text: "하루를 마무리하며 학습해요!" };
+}
+
+function getDaysTogether() {
+  if (!state.profile?.created_at) return 1;
+  const created = new Date(state.profile.created_at);
+  const now = new Date();
+  const diffMs = now - created;
+  const days = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  return Math.max(1, days + 1); // 최소 1일
+}
+
+function getTotalWordsLearned() {
+  if (!state.history?.days) return 0;
+  let total = 0;
+  for (const day of state.history.days) {
+    total += day.learning_done;
+  }
+  return total;
+}
+
+function getTodayProgress() {
+  if (!state.history?.days) return { done: 0, target: 0 };
+  const today = getLocalToday();
+  const todayDay = state.history.days.find((d) => d.plan_date === today);
+  if (!todayDay) return { done: 0, target: state.profile?.daily_target ?? 3 };
+  return { done: todayDay.learning_done, target: todayDay.learning_target };
+}
+
+function renderHome() {
+  const el = document.getElementById("home");
+  if (!el) return;
+
+  const greeting = getGreeting();
+  const streak = state.history?.streak;
+  const currentStreak = streak?.current_streak_days ?? 0;
+  const bestStreak = streak?.best_streak_days ?? 0;
+  const daysTogether = getDaysTogether();
+  const totalWords = getTotalWordsLearned();
+  const todayProgress = getTodayProgress();
+
+  const todayDone = todayProgress.done > 0;
+  const ctaText = todayDone ? "이어서 학습하기" : "오늘 학습 시작하기";
+
+  el.innerHTML = `
+    <div class="home-greeting">
+      <div class="greeting-emoji">${greeting.emoji}</div>
+      <h2>${escapeHtml(greeting.text)}</h2>
+      <p>오늘도 조금씩, 확실하게.</p>
+    </div>
+
+    <div class="home-stats">
+      <div class="home-stat-card${currentStreak > 0 ? " highlight" : ""}">
+        <div class="stat-icon">🔥</div>
+        <div class="stat-value">${currentStreak}<span style="font-size:14px;font-weight:400;">일</span></div>
+        <div class="stat-label">연속 학습</div>
+      </div>
+      <div class="home-stat-card">
+        <div class="stat-icon">📚</div>
+        <div class="stat-value">${totalWords}<span style="font-size:14px;font-weight:400;">개</span></div>
+        <div class="stat-label">총 학습 단어</div>
+      </div>
+      <div class="home-stat-card">
+        <div class="stat-icon">📝</div>
+        <div class="stat-value">${todayProgress.done}/${todayProgress.target}</div>
+        <div class="stat-label">오늘 학습량</div>
+      </div>
+      <div class="home-stat-card">
+        <div class="stat-icon">🤝</div>
+        <div class="stat-value">${daysTogether}<span style="font-size:14px;font-weight:400;">일</span></div>
+        <div class="stat-label">함께한 시간</div>
+      </div>
+    </div>
+
+    <div class="home-actions">
+      <button class="btn btn-primary" onclick="setTab('today')">${escapeHtml(ctaText)}</button>
+    </div>
+
+    ${bestStreak > 0 ? `<div class="home-tip">🏆 최고 기록: ${bestStreak}일 연속</div>` : `<div class="home-tip">첫 학습을 시작하면 연속 기록이 쌓여요!</div>`}
+  `;
+}
+
 function renderAll() {
   renderHeader();
   updateTabLabels();
-  renderToday();
-  renderInbox();
+  renderHome();
+  // Today/Inbox는 해당 탭 진입 시 lazy-load
+  if (state.activeTab === "today" && state.plan) renderToday();
+  if (state.activeTab === "inbox") renderInbox();
   renderSettings();
   renderStreakMini();
 }
@@ -1171,6 +1292,16 @@ function resetAuthForms() {
 function showMainApp() {
   document.getElementById("auth-screen").classList.add("hidden");
   document.getElementById("main-app").classList.remove("hidden");
+
+  // 홈 탭을 기본 활성 탭으로 설정
+  document.querySelectorAll(".tab").forEach((tab) => {
+    const isHome = tab.dataset.tab === "home";
+    tab.classList.toggle("active", isHome);
+    tab.setAttribute("aria-selected", isHome ? "true" : "false");
+  });
+  document.querySelectorAll(".panel").forEach((panel) => {
+    panel.classList.toggle("hidden", panel.id !== "home");
+  });
 }
 
 function showAuthForm(formId) {
@@ -1420,10 +1551,27 @@ window.scrollToFirstReview = scrollToFirstReview;
  * 로그인 성공 후 앱 초기화
  */
 async function onSignedIn() {
+  // 초기 상태 리셋
+  todayLoaded = false;
+  state.plan = null;
+  state.reviews = [];
+  state.activeTab = "home";
+
   showMainApp();
   bindTabs();
   renderHeader();
   updateTabLabels();
+
+  // 홈에 로딩 표시
+  const homeEl = document.getElementById("home");
+  if (homeEl) {
+    homeEl.innerHTML = `
+      <div class="loading-state">
+        <div class="loading-spinner"></div>
+        <p>잠시만요...</p>
+      </div>
+    `;
+  }
 
   // 서버에 사용자 초기화 요청
   try {
@@ -1432,14 +1580,8 @@ async function onSignedIn() {
     // Non-blocking — 이미 초기화된 사용자일 수 있음
   }
 
-  await loadData();
-
-  // Also load history in background for streak display
-  try {
-    state.history = await api("/api/v1/history?type=all");
-  } catch {
-    // Non-blocking
-  }
+  // 빠른 데이터만 로드 (프로필 + 히스토리, AI 호출 없음)
+  await loadDashboardData();
 
   renderAll();
 }
@@ -1478,9 +1620,9 @@ main().catch((error) => {
     showAuthScreen();
     return;
   }
-  const todayEl = document.getElementById("today");
-  if (todayEl) {
-    todayEl.innerHTML = `
+  const el = document.getElementById("home") || document.getElementById("today");
+  if (el) {
+    el.innerHTML = `
       <div class="empty-state">
         <div class="empty-icon">⚠️</div>
         <p>${escapeHtml(t("errors.init_fail", { message: error.message }))}</p>
