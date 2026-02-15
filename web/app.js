@@ -92,6 +92,45 @@ async function api(path, options = {}) {
   }
 }
 
+// ─── Audio Storage (IndexedDB) ───
+const AudioStore = (() => {
+  const DB_NAME = "tw_audio";
+  const STORE_NAME = "recordings";
+  let _db = null;
+
+  function open() {
+    if (_db) return Promise.resolve(_db);
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = () => req.result.createObjectStore(STORE_NAME);
+      req.onsuccess = () => { _db = req.result; resolve(_db); };
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function save(planItemId, blob) {
+    try {
+      const db = await open();
+      const tx = db.transaction(STORE_NAME, "readwrite");
+      tx.objectStore(STORE_NAME).put(blob, planItemId);
+    } catch { /* IndexedDB 미지원 시 무시 */ }
+  }
+
+  async function load(planItemId) {
+    try {
+      const db = await open();
+      return new Promise((resolve) => {
+        const tx = db.transaction(STORE_NAME, "readonly");
+        const req = tx.objectStore(STORE_NAME).get(planItemId);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => resolve(null);
+      });
+    } catch { return null; }
+  }
+
+  return { save, load };
+})();
+
 // ─── Utility ───
 function escapeHtml(raw) {
   if (!raw) return "";
@@ -341,7 +380,7 @@ async function loadTodayData() {
       api("/api/v1/reviews/queue"),
     ]);
     state.plan = planRes;
-    restoreRecordingsFromServer(planRes);
+    await restoreRecordingsFromServer(planRes);
     restoreSentencesFromServer(planRes);
     state.reviews = queueRes.tasks || [];
     todayLoaded = true;
@@ -355,7 +394,7 @@ async function refreshToday() {
   try {
     const planRes = await api("/api/v1/day-plans/today?create_if_missing=true");
     state.plan = planRes;
-    restoreRecordingsFromServer(planRes);
+    await restoreRecordingsFromServer(planRes);
     restoreSentencesFromServer(planRes);
     renderToday();
   } catch (err) {
@@ -393,8 +432,9 @@ async function refreshSettings() {
 
 // ─── Speech Attempts 복원 ───
 /** 서버에서 받은 speechAttempts 데이터를 state.recordings에 복원한다 */
-function restoreRecordingsFromServer(planRes) {
+async function restoreRecordingsFromServer(planRes) {
   if (!planRes || !planRes.speechAttempts) return;
+  const restorePromises = [];
   for (const [planItemId, attempt] of Object.entries(planRes.speechAttempts)) {
     const existing = state.recordings[planItemId];
     // 로컬에 더 최신 데이터(녹음 중이거나 blob 있음)가 있으면 덮어쓰지 않음
@@ -405,13 +445,28 @@ function restoreRecordingsFromServer(planRes) {
       score: attempt.score,
       durationMs: attempt.durationMs,
       blobUrl: null,
+      blob: null,
       mediaRecorder: null,
       chunks: [],
       startedAt: 0,
       recognition: null,
       recognizedText: "",
     };
+    // IndexedDB에서 오디오 blob 복원
+    restorePromises.push(
+      AudioStore.load(planItemId).then((blob) => {
+        if (blob) {
+          const blobUrl = URL.createObjectURL(blob);
+          state.recordings[planItemId] = {
+            ...state.recordings[planItemId],
+            blob,
+            blobUrl,
+          };
+        }
+      })
+    );
   }
+  await Promise.all(restorePromises);
 }
 
 // ─── Sentence Drafts 복원 ───
@@ -665,6 +720,12 @@ async function saveRecording(item) {
       score,
       status: "saved",
     };
+
+    // blob을 IndexedDB에 저장 (새로고침 후 재생 가능)
+    if (recording.blob) {
+      AudioStore.save(item.planItemId, recording.blob);
+    }
+
     await patchItem(item.planItemId, { speechStatus: "done" });
     showToast(t("today.toast.score", { score }));
   } catch (err) {
@@ -826,8 +887,8 @@ function renderToday() {
                   : `<span class="meta-text">${escapeHtml(t("today.speech.label"))}</span>`
               }
             </div>
-            ${item.speechStatus !== "done" ? `
             <div class="actions-row">
+              ${item.speechStatus !== "done" ? `
               ${!recording || recording.status === "idle" || !recording.status
                 ? `<button class="btn btn-secondary btn-sm" data-item="${item.planItemId}" data-type="record-start">${escapeHtml(t("today.speech.start"))}</button>`
                 : ""
@@ -842,8 +903,22 @@ function renderToday() {
                 : ""
               }
               <button class="btn btn-tertiary btn-sm" data-item="${item.planItemId}" data-type="skip-speech">${escapeHtml(t("today.speech.skip"))}</button>
+              ` : `
+              ${recording?.status !== "recording" && recording?.status !== "recorded"
+                ? `<button class="btn btn-tertiary btn-sm" data-item="${item.planItemId}" data-type="record-start">${escapeHtml(t("today.speech.retry"))}</button>`
+                : ""
+              }
+              ${recording?.status === "recording"
+                ? `<button class="btn btn-primary btn-sm" data-item="${item.planItemId}" data-type="record-stop">${escapeHtml(t("today.speech.stop"))}</button>`
+                : ""
+              }
+              ${recording?.status === "recorded"
+                ? `<button class="btn btn-primary btn-sm" data-item="${item.planItemId}" data-type="record-save">${escapeHtml(t("today.speech.save"))}</button>
+                   <button class="btn btn-secondary btn-sm" data-item="${item.planItemId}" data-type="record-start">${escapeHtml(t("today.speech.retry"))}</button>`
+                : ""
+              }
+              `}
             </div>
-            ` : ""}
             ${recording?.blobUrl ? `<audio controls src="${recording.blobUrl}"></audio>` : ""}
             ${recording?.score
               ? `<div class="score-badge ${recording.score >= 80 ? "score-high" : recording.score >= 60 ? "score-mid" : "score-low"}">
