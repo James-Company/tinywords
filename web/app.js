@@ -1249,12 +1249,26 @@ function renderHome() {
 function renderAll() {
   renderHeader();
   updateTabLabels();
-  renderHome();
-  // Today/Inbox는 해당 탭 진입 시 lazy-load
-  if (state.activeTab === "today" && state.plan) renderToday();
-  if (state.activeTab === "inbox") renderInbox();
-  renderSettings();
   renderStreakMini();
+
+  // 활성 탭에 따라 해당 패널만 렌더링
+  switch (state.activeTab) {
+    case "home":
+      renderHome();
+      break;
+    case "today":
+      if (state.plan) renderToday();
+      break;
+    case "inbox":
+      renderInbox();
+      break;
+    case "history":
+      renderHistory();
+      break;
+    case "settings":
+      renderSettings();
+      break;
+  }
 }
 
 // ─── Auth / Main Screen 전환 ───

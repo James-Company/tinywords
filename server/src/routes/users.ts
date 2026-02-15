@@ -171,6 +171,7 @@ export function registerUserRoutes() {
     });
 
     if (profileErr) {
+      console.error("[initializeUser] profile insert error:", profileErr);
       return fail(ctx.requestId, "INTERNAL_ERROR", "failed to create profile");
     }
 
