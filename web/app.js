@@ -788,11 +788,11 @@ function renderToday() {
           <!-- Step 1: Recall -->
           ${!item.isCompleted ? `
           <div class="actions-row">
-            <button class="btn btn-primary btn-sm" data-item="${item.planItemId}" data-type="recall-success"
+            <button class="btn ${item.recallStatus === "success" ? "btn-primary" : "btn-secondary"} btn-sm" data-item="${item.planItemId}" data-type="recall-success"
               ${item.recallStatus === "success" ? "disabled" : ""}>
               ${escapeHtml(t("today.recall.success"))}
             </button>
-            <button class="btn btn-secondary btn-sm" data-item="${item.planItemId}" data-type="recall-fail"
+            <button class="btn ${item.recallStatus === "fail" ? "btn-primary" : "btn-secondary"} btn-sm" data-item="${item.planItemId}" data-type="recall-fail"
               ${item.recallStatus !== "pending" ? "disabled" : ""}>
               ${escapeHtml(t("today.recall.fail"))}
             </button>
