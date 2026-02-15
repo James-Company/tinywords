@@ -277,6 +277,7 @@ function itemTypeLabel(type) {
 // ─── Tab Handling ───
 function setTab(tabId) {
   state.activeTab = tabId;
+  try { sessionStorage.setItem("tw_active_tab", tabId); } catch {}
   document.querySelectorAll(".tab").forEach((tab) => {
     const isActive = tab.dataset.tab === tabId;
     tab.classList.toggle("active", isActive);
@@ -1780,6 +1781,7 @@ function bindOnboardingUI() {
 // SSOT: docs/22_AUTH_SPEC.md §9.2
 
 function showAuthScreen() {
+  document.getElementById("splash-screen")?.classList.add("hidden");
   document.getElementById("auth-screen").classList.remove("hidden");
   document.getElementById("main-app").classList.add("hidden");
   resetAuthForms();
@@ -1809,17 +1811,19 @@ function resetAuthForms() {
 }
 
 function showMainApp() {
+  document.getElementById("splash-screen")?.classList.add("hidden");
   document.getElementById("auth-screen").classList.add("hidden");
   document.getElementById("main-app").classList.remove("hidden");
 
-  // 홈 탭을 기본 활성 탭으로 설정
-  document.querySelectorAll(".tab").forEach((tab) => {
-    const isHome = tab.dataset.tab === "home";
-    tab.classList.toggle("active", isHome);
-    tab.setAttribute("aria-selected", isHome ? "true" : "false");
+  // 저장된 탭 또는 홈 탭으로 설정
+  const tab = state.activeTab || "home";
+  document.querySelectorAll(".tab").forEach((t) => {
+    const isActive = t.dataset.tab === tab;
+    t.classList.toggle("active", isActive);
+    t.setAttribute("aria-selected", isActive ? "true" : "false");
   });
   document.querySelectorAll(".panel").forEach((panel) => {
-    panel.classList.toggle("hidden", panel.id !== "home");
+    panel.classList.toggle("hidden", panel.id !== tab);
   });
 }
 
@@ -2102,7 +2106,8 @@ async function onSignedIn() {
   todayLoaded = false;
   state.plan = null;
   state.reviews = [];
-  state.activeTab = "home";
+  const savedTab = (() => { try { return sessionStorage.getItem("tw_active_tab"); } catch { return null; } })();
+  state.activeTab = savedTab || "home";
 
   // 서버에 사용자 초기화 요청 (온보딩 완료 여부 확인)
   let initResult = null;

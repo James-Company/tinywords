@@ -8,8 +8,16 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
+    <!-- ═══ Splash (세션 확인 중) ═══ -->
+    <div id="splash-screen" class="auth-screen" style="display:flex;align-items:center;justify-content:center;min-height:100vh;">
+      <div style="text-align:center;">
+        <h1 class="brand">TinyWords</h1>
+        <p class="sub" style="margin-top:8px;color:var(--text-secondary);">잠시만요...</p>
+      </div>
+    </div>
+
     <!-- ═══ Auth Screen ═══ -->
-    <div id="auth-screen" class="auth-screen">
+    <div id="auth-screen" class="auth-screen hidden">
       <div class="auth-container">
         <div class="auth-header">
           <h1 class="brand">TinyWords</h1>
