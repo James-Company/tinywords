@@ -711,7 +711,12 @@ function renderToday() {
   const el = document.getElementById("today");
   const plan = state.plan;
   if (!plan) {
-    el.innerHTML = `<div class="loading-spinner">${escapeHtml(t("common.loading"))}</div>`;
+    el.innerHTML = `
+      <div class="loading-state">
+        <div class="loading-spinner"></div>
+        <p>${escapeHtml(t("common.loading"))}</p>
+      </div>
+    `;
     return;
   }
 
@@ -1143,7 +1148,12 @@ function renderHistory() {
   const data = state.history;
 
   if (!data) {
-    el.innerHTML = `<div class="loading-spinner">${escapeHtml(t("common.loading"))}</div>`;
+    el.innerHTML = `
+      <div class="loading-state">
+        <div class="loading-spinner"></div>
+        <p>${escapeHtml(t("common.loading"))}</p>
+      </div>
+    `;
     return;
   }
 
@@ -1362,7 +1372,12 @@ function renderSettings() {
   const el = document.getElementById("settings");
   const p = state.profile;
   if (!p) {
-    el.innerHTML = `<div class="loading-spinner">${escapeHtml(t("common.loading"))}</div>`;
+    el.innerHTML = `
+      <div class="loading-state">
+        <div class="loading-spinner"></div>
+        <p>${escapeHtml(t("common.loading"))}</p>
+      </div>
+    `;
     return;
   }
 
