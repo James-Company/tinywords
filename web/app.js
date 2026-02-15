@@ -25,7 +25,7 @@ import {
 const state = {
   profile: null,
   plan: null,
-  reviews: [],
+  reviews: null,
   history: null,
   sentenceDrafts: {},
   sentenceFeedbacks: {},
@@ -1026,6 +1026,15 @@ async function submitReview(reviewId, result) {
 
 function renderInbox() {
   const el = document.getElementById("inbox");
+  if (!state.reviews) {
+    el.innerHTML = `
+      <div class="loading-state">
+        <div class="loading-spinner"></div>
+        <p>${escapeHtml(t("common.loading"))}</p>
+      </div>
+    `;
+    return;
+  }
   const tasks = state.reviews.filter((t) => t.status === "queued");
   const today = getLocalToday();
 
@@ -1636,6 +1645,16 @@ function renderHome() {
   const el = document.getElementById("home");
   if (!el) return;
 
+  if (!state.profile) {
+    el.innerHTML = `
+      <div class="loading-state">
+        <div class="loading-spinner"></div>
+        <p>${escapeHtml(t("common.loading"))}</p>
+      </div>
+    `;
+    return;
+  }
+
   const greeting = getGreeting();
   const streak = state.history?.streak;
   const currentStreak = streak?.current_streak_days ?? 0;
@@ -2109,7 +2128,12 @@ function bindAuthUI() {
     const url = type === "terms" ? "/terms.html" : "/privacy.html";
     const title = type === "terms" ? "이용약관" : "개인정보처리방침";
     legalTitle.textContent = title;
-    legalBody.innerHTML = `<div class="loading-spinner">불러오는 중...</div>`;
+    legalBody.innerHTML = `
+      <div class="loading-state">
+        <div class="loading-spinner"></div>
+        <p>불러오는 중...</p>
+      </div>
+    `;
     legalOverlay.classList.remove("hidden");
 
     if (legalCache[type]) {
@@ -2184,7 +2208,7 @@ async function onSignedIn() {
   // 초기 상태 리셋
   todayLoaded = false;
   state.plan = null;
-  state.reviews = [];
+  state.reviews = null;
   const savedTab = (() => { try { return sessionStorage.getItem("tw_active_tab"); } catch { return null; } })();
   state.activeTab = savedTab || "home";
 
