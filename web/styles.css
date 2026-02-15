@@ -1302,6 +1302,10 @@ select {
   cursor: not-allowed;
 }
 
+.btn-loading {
+  pointer-events: none;
+  opacity: 0.7;
+}
 .btn-loading::after {
   content: "";
   display: inline-block;
@@ -1312,6 +1316,12 @@ select {
   border-radius: 50%;
   animation: spin 0.6s linear infinite;
   margin-left: var(--space-8);
+  vertical-align: middle;
+}
+.btn-secondary.btn-loading::after,
+.btn-tertiary.btn-loading::after {
+  border-color: rgba(0,0,0,0.15);
+  border-top-color: var(--primary);
 }
 
 @keyframes spin {

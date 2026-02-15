@@ -211,6 +211,21 @@ function urlBase64ToUint8Array(base64String) {
   return outputArray;
 }
 
+/** 버튼 클릭 시 로딩 상태를 표시하고, 작업 완료 후 복원한다. */
+async function withLoading(button, asyncFn) {
+  if (button.disabled) return;
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.classList.add("btn-loading");
+  try {
+    await asyncFn();
+  } finally {
+    button.disabled = false;
+    button.classList.remove("btn-loading");
+    button.textContent = originalText;
+  }
+}
+
 function showError(msg) {
   const banner = document.getElementById("error-banner");
   banner.innerHTML = `<span>${escapeHtml(msg)}</span><button class="retry-btn" onclick="location.reload()">${escapeHtml(t("common.retry"))}</button>`;
@@ -875,13 +890,17 @@ function renderToday() {
       const item = state.plan.items.find((it) => it.planItemId === itemId);
       if (!item) return;
 
-      if (type === "recall-success") await patchItem(itemId, { recallStatus: "success" });
-      else if (type === "recall-fail") await patchItem(itemId, { recallStatus: "fail" });
-      else if (type === "coach") await requestSentenceCoach(item);
-      else if (type === "record-start") await startRecording(item);
-      else if (type === "record-stop") stopRecording(item);
-      else if (type === "record-save") await saveRecording(item);
-      else if (type === "skip-speech") await patchItem(itemId, { speechStatus: "skipped" });
+      // 녹음 시작/정지는 즉시 동작이므로 로딩 불필요
+      if (type === "record-start") { await startRecording(item); return; }
+      if (type === "record-stop") { stopRecording(item); return; }
+
+      await withLoading(button, async () => {
+        if (type === "recall-success") await patchItem(itemId, { recallStatus: "success" });
+        else if (type === "recall-fail") await patchItem(itemId, { recallStatus: "fail" });
+        else if (type === "coach") await requestSentenceCoach(item);
+        else if (type === "record-save") await saveRecording(item);
+        else if (type === "skip-speech") await patchItem(itemId, { speechStatus: "skipped" });
+      });
     });
   });
 
@@ -892,7 +911,7 @@ function renderToday() {
   });
 
   const completeBtn = document.getElementById("complete-day");
-  if (completeBtn) completeBtn.addEventListener("click", completeToday);
+  if (completeBtn) completeBtn.addEventListener("click", () => withLoading(completeBtn, completeToday));
 }
 
 function renderCoachFeedback(feedback) {
@@ -1044,8 +1063,8 @@ function renderInbox() {
   el.innerHTML = html;
 
   el.querySelectorAll("button[data-review]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      await submitReview(button.dataset.review, button.dataset.result);
+    button.addEventListener("click", () => {
+      withLoading(button, () => submitReview(button.dataset.review, button.dataset.result));
     });
   });
 }
