@@ -232,6 +232,61 @@ export async function initializeUser() {
   });
 }
 
+/**
+ * 현재 사용자 ID 반환. 없으면 null.
+ */
+export function getCurrentUserId() {
+  return _currentSession?.user?.id || null;
+}
+
+// ─── Audio Storage (Supabase Storage) ───
+
+const AUDIO_BUCKET = "audio-recordings";
+
+/**
+ * 오디오 Blob을 Supabase Storage에 업로드한다.
+ * @param {string} userId
+ * @param {string} planItemId
+ * @param {Blob} blob
+ * @returns {{ path: string } | null} 저장된 파일 경로 (bucket 상대 경로)
+ */
+export async function uploadAudioFile(userId, planItemId, blob) {
+  const ts = Date.now();
+  const filePath = `${userId}/${planItemId}/${ts}.webm`;
+
+  const { error } = await supabase.storage
+    .from(AUDIO_BUCKET)
+    .upload(filePath, blob, {
+      contentType: "audio/webm",
+      upsert: false,
+    });
+
+  if (error) {
+    console.error("[audio-upload]", error);
+    return null;
+  }
+  return { path: filePath };
+}
+
+/**
+ * Supabase Storage 파일의 Signed URL(1시간 유효)을 반환한다.
+ * @param {string} storagePath - bucket 상대 경로
+ * @returns {string|null}
+ */
+export async function getAudioSignedUrl(storagePath) {
+  if (!storagePath || storagePath.startsWith("local://")) return null;
+
+  const { data, error } = await supabase.storage
+    .from(AUDIO_BUCKET)
+    .createSignedUrl(storagePath, 3600); // 1시간 유효
+
+  if (error) {
+    console.error("[audio-url]", error);
+    return null;
+  }
+  return data?.signedUrl || null;
+}
+
 // ─── 입력 검증 ───
 
 /**

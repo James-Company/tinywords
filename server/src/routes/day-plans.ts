@@ -454,24 +454,26 @@ export function registerDayPlanRoutes() {
 
 async function fetchSpeechAttempts(
   itemIds: string[],
-): Promise<Record<string, { speechId: string; score: number | null; durationMs: number }>> {
+): Promise<Record<string, { speechId: string; score: number | null; durationMs: number; audioUri: string | null }>> {
   if (itemIds.length === 0) return {};
 
   const db = getDb();
   const { data: attempts } = await db
     .from("speech_attempts")
-    .select("id, plan_item_id, pronunciation_score, duration_ms")
+    .select("id, plan_item_id, pronunciation_score, duration_ms, audio_uri")
     .in("plan_item_id", itemIds)
     .order("created_at", { ascending: false });
 
-  const result: Record<string, { speechId: string; score: number | null; durationMs: number }> = {};
+  const result: Record<string, { speechId: string; score: number | null; durationMs: number; audioUri: string | null }> = {};
   for (const sa of (attempts ?? [])) {
     const planItemId = sa.plan_item_id as string;
     if (!result[planItemId]) {
+      const uri = sa.audio_uri as string;
       result[planItemId] = {
         speechId: sa.id as string,
         score: sa.pronunciation_score as number | null,
         durationMs: sa.duration_ms as number,
+        audioUri: uri && !uri.startsWith("local://") ? uri : null,
       };
     }
   }

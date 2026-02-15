@@ -16,6 +16,9 @@ import {
   resetPassword,
   validateEmail,
   validatePassword,
+  uploadAudioFile,
+  getAudioSignedUrl,
+  getCurrentUserId,
 } from "./auth.js";
 
 // ─── State ───
@@ -91,45 +94,6 @@ async function api(path, options = {}) {
     throw err;
   }
 }
-
-// ─── Audio Storage (IndexedDB) ───
-const AudioStore = (() => {
-  const DB_NAME = "tw_audio";
-  const STORE_NAME = "recordings";
-  let _db = null;
-
-  function open() {
-    if (_db) return Promise.resolve(_db);
-    return new Promise((resolve, reject) => {
-      const req = indexedDB.open(DB_NAME, 1);
-      req.onupgradeneeded = () => req.result.createObjectStore(STORE_NAME);
-      req.onsuccess = () => { _db = req.result; resolve(_db); };
-      req.onerror = () => reject(req.error);
-    });
-  }
-
-  async function save(planItemId, blob) {
-    try {
-      const db = await open();
-      const tx = db.transaction(STORE_NAME, "readwrite");
-      tx.objectStore(STORE_NAME).put(blob, planItemId);
-    } catch { /* IndexedDB 미지원 시 무시 */ }
-  }
-
-  async function load(planItemId) {
-    try {
-      const db = await open();
-      return new Promise((resolve) => {
-        const tx = db.transaction(STORE_NAME, "readonly");
-        const req = tx.objectStore(STORE_NAME).get(planItemId);
-        req.onsuccess = () => resolve(req.result || null);
-        req.onerror = () => resolve(null);
-      });
-    } catch { return null; }
-  }
-
-  return { save, load };
-})();
 
 // ─── Utility ───
 function escapeHtml(raw) {
@@ -434,7 +398,7 @@ async function refreshSettings() {
 /** 서버에서 받은 speechAttempts 데이터를 state.recordings에 복원한다 */
 async function restoreRecordingsFromServer(planRes) {
   if (!planRes || !planRes.speechAttempts) return;
-  const restorePromises = [];
+  const urlPromises = [];
   for (const [planItemId, attempt] of Object.entries(planRes.speechAttempts)) {
     const existing = state.recordings[planItemId];
     // 로컬에 더 최신 데이터(녹음 중이거나 blob 있음)가 있으면 덮어쓰지 않음
@@ -444,6 +408,7 @@ async function restoreRecordingsFromServer(planRes) {
       speechId: attempt.speechId,
       score: attempt.score,
       durationMs: attempt.durationMs,
+      audioUri: attempt.audioUri || null,
       blobUrl: null,
       blob: null,
       mediaRecorder: null,
@@ -452,21 +417,21 @@ async function restoreRecordingsFromServer(planRes) {
       recognition: null,
       recognizedText: "",
     };
-    // IndexedDB에서 오디오 blob 복원
-    restorePromises.push(
-      AudioStore.load(planItemId).then((blob) => {
-        if (blob) {
-          const blobUrl = URL.createObjectURL(blob);
-          state.recordings[planItemId] = {
-            ...state.recordings[planItemId],
-            blob,
-            blobUrl,
-          };
-        }
-      })
-    );
+    // Supabase Storage에서 signed URL 생성
+    if (attempt.audioUri) {
+      urlPromises.push(
+        getAudioSignedUrl(attempt.audioUri).then((signedUrl) => {
+          if (signedUrl) {
+            state.recordings[planItemId] = {
+              ...state.recordings[planItemId],
+              blobUrl: signedUrl,
+            };
+          }
+        })
+      );
+    }
   }
-  await Promise.all(restorePromises);
+  await Promise.all(urlPromises);
 }
 
 // ─── Sentence Drafts 복원 ───
@@ -690,15 +655,28 @@ async function saveRecording(item) {
   }
 
   try {
+    // 1) Supabase Storage에 오디오 업로드
+    const userId = getCurrentUserId();
+    let audioUri = `local://${item.planItemId}/${Date.now()}.webm`; // fallback
+
+    if (userId && recording.blob) {
+      const uploadResult = await uploadAudioFile(userId, item.planItemId, recording.blob);
+      if (uploadResult) {
+        audioUri = uploadResult.path;
+      }
+    }
+
+    // 2) speech_attempts 레코드 생성
     const created = await api("/api/v1/speech-attempts", {
       method: "POST",
       body: JSON.stringify({
         plan_item_id: item.planItemId,
-        audio_uri: `local://${item.planItemId}/${Date.now()}.webm`,
+        audio_uri: audioUri,
         duration_ms: recording.durationMs,
       }),
     });
 
+    // 3) 발음 점수 계산 & 저장
     const speechId = created.speech_id;
     const score = calculatePronunciationScore(
       recording.recognizedText || "",
@@ -719,12 +697,8 @@ async function saveRecording(item) {
       speechId,
       score,
       status: "saved",
+      audioUri,
     };
-
-    // blob을 IndexedDB에 저장 (새로고침 후 재생 가능)
-    if (recording.blob) {
-      AudioStore.save(item.planItemId, recording.blob);
-    }
 
     await patchItem(item.planItemId, { speechStatus: "done" });
     showToast(t("today.toast.score", { score }));

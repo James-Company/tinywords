@@ -10,9 +10,9 @@ export function registerSpeechRoutes() {
     ctx: RequestContext,
     input: { plan_item_id: string; audio_uri: string; duration_ms: number },
   ): Promise<ApiSuccess<unknown> | ApiError> {
-    if (!input.audio_uri.startsWith("local://")) {
-      return fail(ctx.requestId, "VALIDATION_ERROR", "audio_uri must be local:// path", [
-        { field: "audio_uri", reason: "invalid_scheme" },
+    if (!input.audio_uri) {
+      return fail(ctx.requestId, "VALIDATION_ERROR", "audio_uri is required", [
+        { field: "audio_uri", reason: "required" },
       ]);
     }
 
