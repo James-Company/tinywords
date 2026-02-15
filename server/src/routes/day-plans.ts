@@ -7,106 +7,211 @@ import {
   getD1DueDate,
   syncPlanItemCompletion,
   type DayPlan,
+  type PlanItem,
 } from "../../../src/domain/day-plan";
 import { applyDayCompletion } from "../../../src/domain/streak";
-import type { ReviewTask } from "../../../src/domain/review";
-import {
-  buildDayPlan,
-  pickWordsForPlan,
-  collectKnownWords,
-  collectRecentWords,
-  type InMemoryStore,
-} from "../store";
+import { getDb } from "../db";
 import { generateWords, toLeajaItems } from "../ai-client";
+import { pickFallbackWords } from "../fallback-words";
+import type { RequestContext } from "../context";
 
-interface RequestContext {
-  requestId: string;
-  nowIso: string;
-  today: string;
+// ── DB row → domain 변환 ──────────────────────────────────────
+
+function toPlanItem(row: Record<string, unknown>): PlanItem {
+  return {
+    planItemId: row.id as string,
+    itemId: (row.learning_item_id as string) ?? "",
+    itemType: row.item_type as PlanItem["itemType"],
+    lemma: row.lemma as string,
+    meaningKo: row.meaning_ko as string,
+    partOfSpeech: (row.part_of_speech as string) ?? "",
+    exampleEn: (row.example_en as string) ?? "",
+    exampleKo: (row.example_ko as string) ?? "",
+    recallStatus: row.recall_status as PlanItem["recallStatus"],
+    sentenceStatus: row.sentence_status as PlanItem["sentenceStatus"],
+    speechStatus: row.speech_status as PlanItem["speechStatus"],
+    isCompleted: row.is_completed as boolean,
+  };
 }
 
-export function registerDayPlanRoutes(store: InMemoryStore) {
-  /**
-   * AI를 사용하여 오늘의 학습 단어를 생성한다.
-   * 실패 시 fallback pool에서 선택한다.
-   */
-  async function generateTodayWords(dailyTarget: 3 | 4 | 5) {
-    const knownWords = collectKnownWords(store);
-    const recentWords = collectRecentWords(store);
+function toDayPlan(
+  planRow: Record<string, unknown>,
+  itemRows: Record<string, unknown>[],
+): DayPlan {
+  return {
+    planId: planRow.id as string,
+    planDate: (planRow.plan_date as string).slice(0, 10),
+    dailyTarget: planRow.daily_target as 3 | 4 | 5,
+    status: planRow.status as "open" | "completed",
+    completedAt: (planRow.completed_at as string) ?? null,
+    items: itemRows.map(toPlanItem),
+  };
+}
 
-    const result = await generateWords({
-      daily_target: dailyTarget,
-      level: store.profile.level,
-      learning_focus: store.profile.learningFocus,
-      known_words_hint: knownWords,
-      avoid_words: recentWords,
-      reason: "daily_plan",
-    });
-
-    const learningItems = toLeajaItems(result.items);
-
-    // AI 생성 단어를 store에 등록 (이력 추적용)
-    store.learningItems.push(...learningItems);
-
-    return learningItems;
-  }
-
+export function registerDayPlanRoutes() {
   async function getTodayDayPlan(
     ctx: RequestContext,
     createIfMissing: boolean,
   ): Promise<ApiSuccess<DayPlan> | ApiError> {
-    // If today's plan already exists, return it
-    if (store.todayPlan && store.todayPlan.planDate === ctx.today) {
-      return ok(ctx.requestId, store.todayPlan);
+    const db = getDb();
+
+    // 오늘 플랜 조회
+    const { data: planRow } = await db
+      .from("day_plans")
+      .select("*")
+      .eq("user_id", ctx.userId)
+      .eq("plan_date", ctx.today)
+      .single();
+
+    if (planRow) {
+      const { data: items } = await db
+        .from("plan_items")
+        .select("*")
+        .eq("plan_id", planRow.id)
+        .order("order_num");
+
+      return ok(ctx.requestId, toDayPlan(planRow, items ?? []));
     }
 
-    // Archive old plan if it exists for a different date
-    if (store.todayPlan && store.todayPlan.planDate !== ctx.today) {
-      store.completedPlans.push(store.todayPlan);
-      store.todayPlan = null;
-    }
-
-    if (!store.todayPlan && !createIfMissing) {
+    if (!createIfMissing) {
       return fail(ctx.requestId, "NOT_FOUND", "today plan not found");
     }
 
-    // AI로 단어를 생성하고 플랜을 만든다
-    try {
-      const words = await generateTodayWords(store.profile.dailyTarget);
-      store.todayPlan = buildDayPlan(ctx.today, store.profile.dailyTarget, words);
-    } catch (err) {
-      // AI 완전 실패 시 기존 풀에서 선택
-      console.warn("[day-plans] AI generation failed, falling back to pool:", err);
-      const usedItemIds = new Set<string>();
-      for (const plan of store.completedPlans) {
-        for (const item of plan.items) {
-          usedItemIds.add(item.itemId);
-        }
-      }
+    // 유저 프로필에서 설정 가져오기
+    const { data: profile } = await db
+      .from("user_profiles")
+      .select("daily_target, level, learning_focus")
+      .eq("user_id", ctx.userId)
+      .single();
 
-      let words = pickWordsForPlan(store.learningItems, store.profile.dailyTarget, usedItemIds);
-      if (words.length < store.profile.dailyTarget) {
-        usedItemIds.clear();
-        words = pickWordsForPlan(store.learningItems, store.profile.dailyTarget, usedItemIds);
-      }
-      store.todayPlan = buildDayPlan(ctx.today, store.profile.dailyTarget, words);
+    const dailyTarget = (profile?.daily_target ?? 3) as 3 | 4 | 5;
+    const level = (profile?.level as string) ?? "A2";
+    const learningFocus = (profile?.learning_focus as string) ?? "travel";
+
+    // 이전 학습 이력 수집 (AI 컨텍스트용)
+    const knownWords = await collectKnownWords(ctx.userId);
+    const recentWords = await collectRecentWords(ctx.userId);
+
+    let learningItemIds: string[] = [];
+
+    try {
+      // AI 단어 생성
+      const result = await generateWords({
+        daily_target: dailyTarget,
+        level,
+        learning_focus: learningFocus,
+        known_words_hint: knownWords,
+        avoid_words: recentWords,
+        reason: "daily_plan",
+      });
+
+      const learningItems = toLeajaItems(result.items);
+
+      // learning_items에 저장
+      const insertRows = learningItems.map((item) => ({
+        user_id: ctx.userId,
+        item_type: item.itemType,
+        lemma: item.lemma,
+        meaning_ko: item.meaningKo,
+        part_of_speech: item.partOfSpeech,
+        example_en: item.exampleEn,
+        example_ko: item.exampleKo,
+        source: item.source,
+        is_active: true,
+      }));
+
+      const { data: inserted } = await db
+        .from("learning_items")
+        .insert(insertRows)
+        .select("id");
+
+      learningItemIds = (inserted ?? []).map((r: Record<string, unknown>) => r.id as string);
+    } catch (err) {
+      // AI 실패 시 폴백 풀 사용
+      console.warn("[day-plans] AI generation failed, falling back:", err);
+      const fallbackWords = pickFallbackWords(dailyTarget, recentWords);
+
+      const insertRows = fallbackWords.map((w) => ({
+        user_id: ctx.userId,
+        item_type: w.item_type,
+        lemma: w.lemma,
+        meaning_ko: w.meaning_ko,
+        part_of_speech: w.part_of_speech,
+        example_en: w.example_en,
+        example_ko: w.example_ko,
+        source: "ai_generated",
+        is_active: true,
+      }));
+
+      const { data: inserted } = await db
+        .from("learning_items")
+        .insert(insertRows)
+        .select("id");
+
+      learningItemIds = (inserted ?? []).map((r: Record<string, unknown>) => r.id as string);
     }
 
-    // Record event
-    store.events.push({
-      eventId: `evt-${Date.now()}`,
-      userId: store.profile.userId,
-      eventName: "today_started",
-      entityType: "day_plan",
-      entityId: store.todayPlan.planId,
-      payloadJson: { plan_id: store.todayPlan.planId, daily_target: store.profile.dailyTarget },
-      occurredAt: ctx.nowIso,
+    // learning_items에서 방금 삽입한 항목 조회
+    const { data: wordRows } = await db
+      .from("learning_items")
+      .select("*")
+      .in("id", learningItemIds);
+
+    const words = wordRows ?? [];
+
+    // day_plan 생성
+    const { data: newPlan, error: planErr } = await db
+      .from("day_plans")
+      .insert({
+        user_id: ctx.userId,
+        plan_date: ctx.today,
+        daily_target: dailyTarget,
+        status: "open",
+      })
+      .select("*")
+      .single();
+
+    if (planErr || !newPlan) {
+      return fail(ctx.requestId, "INTERNAL_ERROR", "failed to create day plan");
+    }
+
+    // plan_items 생성
+    const planItemRows = words.map((w: Record<string, unknown>, i: number) => ({
+      plan_id: newPlan.id,
+      user_id: ctx.userId,
+      learning_item_id: w.id,
+      item_type: w.item_type,
+      lemma: w.lemma,
+      meaning_ko: w.meaning_ko,
+      part_of_speech: w.part_of_speech ?? "",
+      example_en: w.example_en ?? "",
+      example_ko: w.example_ko ?? "",
+      recall_status: "pending",
+      sentence_status: "pending",
+      speech_status: "pending",
+      is_completed: false,
+      order_num: i + 1,
+    }));
+
+    const { data: insertedItems } = await db
+      .from("plan_items")
+      .insert(planItemRows)
+      .select("*");
+
+    // 이벤트 기록
+    await db.from("activity_events").insert({
+      user_id: ctx.userId,
+      event_name: "today_started",
+      entity_type: "day_plan",
+      entity_id: newPlan.id,
+      payload: { plan_id: newPlan.id, daily_target: dailyTarget },
+      occurred_at: ctx.nowIso,
     });
 
-    return ok(ctx.requestId, store.todayPlan);
+    return ok(ctx.requestId, toDayPlan(newPlan, insertedItems ?? []));
   }
 
-  function patchPlanItem(
+  async function patchPlanItem(
     ctx: RequestContext,
     planId: string,
     planItemId: string,
@@ -115,16 +220,34 @@ export function registerDayPlanRoutes(store: InMemoryStore) {
       sentenceStatus?: "pending" | "done" | "skipped";
       speechStatus?: "pending" | "done" | "skipped";
     },
-  ): ApiSuccess<unknown> | ApiError {
-    if (!store.todayPlan || store.todayPlan.planId !== planId) {
+  ): Promise<ApiSuccess<unknown> | ApiError> {
+    const db = getDb();
+
+    // 플랜 소유자 확인
+    const { data: plan } = await db
+      .from("day_plans")
+      .select("id")
+      .eq("id", planId)
+      .eq("user_id", ctx.userId)
+      .single();
+
+    if (!plan) {
       return fail(ctx.requestId, "NOT_FOUND", "plan not found");
     }
 
-    const item = store.todayPlan.items.find((it) => it.planItemId === planItemId);
-    if (!item) {
+    // plan_item 조회
+    const { data: itemRow } = await db
+      .from("plan_items")
+      .select("*")
+      .eq("id", planItemId)
+      .eq("plan_id", planId)
+      .single();
+
+    if (!itemRow) {
       return fail(ctx.requestId, "NOT_FOUND", "plan item not found");
     }
 
+    const item = toPlanItem(itemRow);
     const merged = syncPlanItemCompletion({
       ...item,
       recallStatus: input.recallStatus ?? item.recallStatus,
@@ -132,100 +255,210 @@ export function registerDayPlanRoutes(store: InMemoryStore) {
       speechStatus: input.speechStatus ?? item.speechStatus,
     });
 
-    Object.assign(item, merged);
+    // DB 업데이트
+    await db
+      .from("plan_items")
+      .update({
+        recall_status: merged.recallStatus,
+        sentence_status: merged.sentenceStatus,
+        speech_status: merged.speechStatus,
+        is_completed: merged.isCompleted,
+      })
+      .eq("id", planItemId);
 
-    // Record step event
+    // 이벤트 기록
     const stepType = input.recallStatus ? "recall" : input.sentenceStatus ? "sentence" : "speech";
-    store.events.push({
-      eventId: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      userId: store.profile.userId,
-      eventName: "word_step_completed",
-      entityType: "plan_item",
-      entityId: planItemId,
-      payloadJson: { plan_item_id: planItemId, step_type: stepType },
-      occurredAt: ctx.nowIso,
+    await db.from("activity_events").insert({
+      user_id: ctx.userId,
+      event_name: "word_step_completed",
+      entity_type: "plan_item",
+      entity_id: planItemId,
+      payload: { plan_item_id: planItemId, step_type: stepType },
+      occurred_at: ctx.nowIso,
     });
 
-    return ok(ctx.requestId, item);
+    return ok(ctx.requestId, merged);
   }
 
-  function completePlan(ctx: RequestContext, planId: string): ApiSuccess<unknown> | ApiError {
-    if (!store.todayPlan || store.todayPlan.planId !== planId) {
+  async function completePlan(
+    ctx: RequestContext,
+    planId: string,
+  ): Promise<ApiSuccess<unknown> | ApiError> {
+    const db = getDb();
+
+    // 플랜 + 아이템 조회
+    const { data: planRow } = await db
+      .from("day_plans")
+      .select("*")
+      .eq("id", planId)
+      .eq("user_id", ctx.userId)
+      .single();
+
+    if (!planRow) {
       return fail(ctx.requestId, "NOT_FOUND", "plan not found");
     }
 
-    const idemKey = `POST:/day-plans/${planId}/complete:${ctx.requestId}`;
-    const cached = store.idempotency.get(idemKey);
-    if (cached) {
-      return cached as ApiSuccess<unknown>;
+    // 이미 완료된 플랜이면 현재 상태 반환 (멱등성)
+    if (planRow.status === "completed") {
+      const { data: items } = await db
+        .from("plan_items")
+        .select("*")
+        .eq("plan_id", planId)
+        .order("order_num");
+
+      const { data: streak } = await db
+        .from("streak_states")
+        .select("*")
+        .eq("user_id", ctx.userId)
+        .single();
+
+      return ok(ctx.requestId, {
+        plan: toDayPlan(planRow, items ?? []),
+        streak: streak
+          ? {
+              currentStreak: streak.current_streak,
+              longestStreak: streak.longest_streak,
+              lastCompletedDate: streak.last_completed_date,
+            }
+          : { currentStreak: 0, longestStreak: 0, lastCompletedDate: null },
+        review_tasks_created: 0,
+      });
     }
 
-    const completed = completeDayPlan(store.todayPlan, ctx.nowIso);
+    const { data: itemRows } = await db
+      .from("plan_items")
+      .select("*")
+      .eq("plan_id", planId)
+      .order("order_num");
+
+    const plan = toDayPlan(planRow, itemRows ?? []);
+    const completed = completeDayPlan(plan, ctx.nowIso);
+
     if (completed.status !== "completed") {
       return fail(ctx.requestId, "VALIDATION_ERROR", "plan is not ready to complete");
     }
 
-    store.todayPlan = completed;
-    store.streak = applyDayCompletion(store.streak, completed.planDate);
+    // 플랜 완료 처리
+    await db
+      .from("day_plans")
+      .update({ status: "completed", completed_at: ctx.nowIso })
+      .eq("id", planId);
 
-    // Create D1 review tasks per spaced review policy
-    const newReviewTasks: ReviewTask[] = completed.items.map((item, index) => ({
-      reviewId: `review-${item.itemId}-d1-${Date.now()}-${index}`,
-      itemId: item.itemId,
-      stage: "d1" as const,
-      dueDate: getD1DueDate(completed.planDate),
-      status: "queued" as const,
-      completedAt: null,
-    }));
+    // D1 리뷰 태스크 생성
+    const reviewInserts = completed.items
+      .filter((item) => item.itemId)
+      .map((item) => ({
+        user_id: ctx.userId,
+        learning_item_id: item.itemId,
+        due_date: getD1DueDate(completed.planDate),
+        stage: "d1",
+        status: "queued",
+      }));
 
-    for (const task of newReviewTasks) {
-      const exists = store.reviews.some(
-        (existing) =>
-          existing.itemId === task.itemId &&
-          existing.stage === task.stage &&
-          existing.status === "queued",
-      );
-      if (!exists) {
-        store.reviews.push(task);
+    // 중복 방지: 이미 queued인 동일 item+stage가 없는 것만 삽입
+    let reviewTasksCreated = 0;
+    for (const insert of reviewInserts) {
+      const { data: existing } = await db
+        .from("review_tasks")
+        .select("id")
+        .eq("user_id", ctx.userId)
+        .eq("learning_item_id", insert.learning_item_id)
+        .eq("stage", "d1")
+        .eq("status", "queued")
+        .limit(1);
+
+      if (!existing || existing.length === 0) {
+        await db.from("review_tasks").insert(insert);
+        reviewTasksCreated++;
       }
     }
 
-    // Record events
-    store.events.push({
-      eventId: `evt-${Date.now()}-complete`,
-      userId: store.profile.userId,
-      eventName: "today_completed",
-      entityType: "day_plan",
-      entityId: planId,
-      payloadJson: {
-        plan_id: planId,
-        completed_count: completed.items.length,
-      },
-      occurredAt: ctx.nowIso,
-    });
+    // streak 업데이트
+    const { data: streakRow } = await db
+      .from("streak_states")
+      .select("*")
+      .eq("user_id", ctx.userId)
+      .single();
 
-    store.events.push({
-      eventId: `evt-${Date.now()}-streak`,
-      userId: store.profile.userId,
-      eventName: "streak_updated",
-      entityType: "streak",
-      entityId: store.profile.userId,
-      payloadJson: {
-        date: completed.planDate,
-        current: store.streak.currentStreak,
-        best: store.streak.longestStreak,
-      },
-      occurredAt: ctx.nowIso,
-    });
+    const currentStreak = streakRow
+      ? {
+          currentStreak: streakRow.current_streak as number,
+          longestStreak: streakRow.longest_streak as number,
+          lastCompletedDate: streakRow.last_completed_date as string | null,
+        }
+      : { currentStreak: 0, longestStreak: 0, lastCompletedDate: null };
 
-    const response = ok(ctx.requestId, {
-      plan: store.todayPlan,
-      streak: store.streak,
-      review_tasks_created: newReviewTasks.length,
+    const newStreak = applyDayCompletion(currentStreak, completed.planDate);
+
+    await db
+      .from("streak_states")
+      .upsert({
+        user_id: ctx.userId,
+        current_streak: newStreak.currentStreak,
+        longest_streak: newStreak.longestStreak,
+        last_completed_date: newStreak.lastCompletedDate,
+        updated_at: ctx.nowIso,
+      }, { onConflict: "user_id" });
+
+    // 이벤트 기록
+    await db.from("activity_events").insert([
+      {
+        user_id: ctx.userId,
+        event_name: "today_completed",
+        entity_type: "day_plan",
+        entity_id: planId,
+        payload: { plan_id: planId, completed_count: completed.items.length },
+        occurred_at: ctx.nowIso,
+      },
+      {
+        user_id: ctx.userId,
+        event_name: "streak_updated",
+        entity_type: "streak",
+        entity_id: ctx.userId,
+        payload: {
+          date: completed.planDate,
+          current: newStreak.currentStreak,
+          best: newStreak.longestStreak,
+        },
+        occurred_at: ctx.nowIso,
+      },
+    ]);
+
+    return ok(ctx.requestId, {
+      plan: completed,
+      streak: newStreak,
+      review_tasks_created: reviewTasksCreated,
     });
-    store.idempotency.set(idemKey, response);
-    return response;
   }
 
   return { getTodayDayPlan, patchPlanItem, completePlan };
+}
+
+// ── 학습 이력 수집 헬퍼 ─────────────────────────────────────
+
+async function collectKnownWords(userId: string): Promise<string[]> {
+  const db = getDb();
+  const { data } = await db
+    .from("plan_items")
+    .select("lemma")
+    .eq("user_id", userId)
+    .eq("recall_status", "success");
+
+  if (!data) return [];
+  const known = new Set(data.map((r: Record<string, unknown>) => r.lemma as string));
+  return [...known];
+}
+
+async function collectRecentWords(userId: string, limit = 25): Promise<string[]> {
+  const db = getDb();
+  const { data } = await db
+    .from("plan_items")
+    .select("lemma, created_at")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (!data) return [];
+  const recent = new Set(data.map((r: Record<string, unknown>) => r.lemma as string));
+  return [...recent];
 }

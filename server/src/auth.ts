@@ -5,7 +5,7 @@
  * JWT 검증 후 userId를 추출하여 RequestContext에 주입한다.
  * Supabase service_role 키로 서버 사이드 검증을 수행한다.
  */
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { getDb } from "./db";
 
 export interface AuthResult {
   userId: string;
@@ -15,34 +15,6 @@ export interface AuthResult {
 export interface AuthError {
   code: "UNAUTHORIZED";
   message: string;
-}
-
-let _supabaseAdmin: SupabaseClient | null = null;
-
-/**
- * Supabase Admin 클라이언트를 지연 초기화한다.
- * service_role 키를 사용하므로 서버에서만 호출해야 한다.
- */
-function getSupabaseAdmin(): SupabaseClient {
-  if (_supabaseAdmin) return _supabaseAdmin;
-
-  const url = process.env.SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (!url || !serviceKey) {
-    throw new Error(
-      "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set in environment variables",
-    );
-  }
-
-  _supabaseAdmin = createClient(url, serviceKey, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
-  });
-
-  return _supabaseAdmin;
 }
 
 /**
@@ -71,7 +43,7 @@ export async function verifyAuth(
   }
 
   try {
-    const supabase = getSupabaseAdmin();
+    const supabase = getDb();
     const { data, error } = await supabase.auth.getUser(token);
 
     if (error || !data.user) {

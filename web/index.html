@@ -16,7 +16,7 @@
         </div>
 
         <!-- Login Form (default) -->
-        <form id="auth-login-form" class="auth-form">
+        <form id="auth-login-form" class="auth-form" autocomplete="off">
           <div class="auth-field">
             <label for="login-email">이메일</label>
             <input type="email" id="login-email" placeholder="email@example.com" autocomplete="email" required />
@@ -45,7 +45,7 @@
         </form>
 
         <!-- Signup Form (hidden) -->
-        <form id="auth-signup-form" class="auth-form hidden">
+        <form id="auth-signup-form" class="auth-form hidden" autocomplete="off">
           <div class="auth-field">
             <label for="signup-email">이메일</label>
             <input type="email" id="signup-email" placeholder="email@example.com" autocomplete="email" required />
@@ -53,6 +53,25 @@
           <div class="auth-field">
             <label for="signup-password">비밀번호</label>
             <input type="password" id="signup-password" placeholder="8자 이상 (영문+숫자)" autocomplete="new-password" required />
+          </div>
+          <div class="auth-field">
+            <label for="signup-password-confirm">비밀번호 확인</label>
+            <input type="password" id="signup-password-confirm" placeholder="비밀번호를 다시 입력해주세요" autocomplete="new-password" required />
+          </div>
+          <div class="auth-terms">
+            <label class="auth-checkbox-label auth-checkbox-all">
+              <input type="checkbox" id="signup-agree-all" />
+              <span>전체 동의</span>
+            </label>
+            <div class="auth-terms-divider"></div>
+            <label class="auth-checkbox-label">
+              <input type="checkbox" id="signup-terms" />
+              <span><a href="#" data-legal="terms">이용약관</a>에 동의합니다. <em>(필수)</em></span>
+            </label>
+            <label class="auth-checkbox-label">
+              <input type="checkbox" id="signup-privacy" />
+              <span><a href="#" data-legal="privacy">개인정보처리방침</a>에 동의합니다. <em>(필수)</em></span>
+            </label>
           </div>
           <div id="signup-error" class="auth-error hidden"></div>
           <button type="submit" class="btn btn-primary btn-block" id="signup-submit-btn">가입하기</button>
@@ -72,7 +91,7 @@
         </form>
 
         <!-- Password Reset Form (hidden) -->
-        <form id="auth-reset-form" class="auth-form hidden">
+        <form id="auth-reset-form" class="auth-form hidden" autocomplete="off">
           <p class="auth-reset-desc">가입하신 이메일을 입력하시면 비밀번호 재설정 링크를 보내드립니다.</p>
           <div class="auth-field">
             <label for="reset-email">이메일</label>
@@ -127,6 +146,17 @@
     <div id="toast" class="toast hidden"></div>
     <div id="modal-overlay" class="modal-overlay hidden">
       <div class="modal" id="modal-content"></div>
+    </div>
+
+    <!-- 약관/개인정보 모달 -->
+    <div id="legal-modal-overlay" class="legal-modal-overlay hidden">
+      <div class="legal-modal">
+        <div class="legal-modal-header">
+          <h2 id="legal-modal-title"></h2>
+          <button class="legal-modal-close" id="legal-modal-close" aria-label="닫기">&times;</button>
+        </div>
+        <div class="legal-modal-body" id="legal-modal-body"></div>
+      </div>
     </div>
 
     <script type="module" src="/app.js"></script>

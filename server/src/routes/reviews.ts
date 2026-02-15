@@ -3,37 +3,65 @@
  */
 import { fail, ok, type ApiError, type ApiSuccess } from "../../../src/api/contract";
 import { sortQueue, submitReview, type ReviewResult, type ReviewTask } from "../../../src/domain/review";
-import type { InMemoryStore } from "../store";
+import { getDb } from "../db";
+import type { RequestContext } from "../context";
 
-interface RequestContext {
-  requestId: string;
-  nowIso: string;
-  today: string;
+// DB row → domain 변환
+function toReviewTask(row: Record<string, unknown>): ReviewTask {
+  return {
+    reviewId: row.id as string,
+    itemId: row.learning_item_id as string,
+    dueDate: (row.due_date as string).slice(0, 10),
+    stage: row.stage as ReviewTask["stage"],
+    status: row.status as ReviewTask["status"],
+    completedAt: (row.completed_at as string) ?? null,
+  };
 }
 
-export function registerReviewRoutes(store: InMemoryStore) {
-  function getQueue(ctx: RequestContext): ApiSuccess<unknown> {
-    const queued = store.reviews.filter((task) => task.status === "queued");
-    const sorted = sortQueue(queued, ctx.today);
+export function registerReviewRoutes() {
+  async function getQueue(ctx: RequestContext): Promise<ApiSuccess<unknown>> {
+    const db = getDb();
 
-    const overdueCount = queued.filter((task) => task.dueDate < ctx.today).length;
-    const dueTodayCount = queued.filter((task) => task.dueDate === ctx.today).length;
+    // queued 리뷰 + learning_item 정보 조인
+    const { data: rows } = await db
+      .from("review_tasks")
+      .select(`
+        *,
+        learning_items (
+          lemma,
+          meaning_ko,
+          item_type,
+          example_en
+        )
+      `)
+      .eq("user_id", ctx.userId)
+      .eq("status", "queued");
 
-    // Enrich tasks with learning item info
+    const tasks = (rows ?? []).map((row: Record<string, unknown>) => toReviewTask(row));
+    const sorted = sortQueue(tasks, ctx.today);
+
+    const overdueCount = tasks.filter((t) => t.dueDate < ctx.today).length;
+    const dueTodayCount = tasks.filter((t) => t.dueDate === ctx.today).length;
+
+    // learning_item 정보로 enrich
     const enrichedTasks = sorted.map((task) => {
-      const learningItem = store.learningItems.find((li) => li.itemId === task.itemId);
+      const raw = (rows ?? []).find(
+        (r: Record<string, unknown>) => r.id === task.reviewId,
+      );
+      const li = raw?.learning_items as Record<string, unknown> | null;
+
       return {
         ...task,
-        lemma: learningItem?.lemma ?? task.itemId,
-        meaningKo: learningItem?.meaningKo ?? "",
-        itemType: learningItem?.itemType ?? "vocab",
-        exampleEn: learningItem?.exampleEn ?? "",
+        lemma: (li?.lemma as string) ?? task.itemId,
+        meaningKo: (li?.meaning_ko as string) ?? "",
+        itemType: (li?.item_type as string) ?? "vocab",
+        exampleEn: (li?.example_en as string) ?? "",
       };
     });
 
     return ok(ctx.requestId, {
       summary: {
-        queued_total: queued.length,
+        queued_total: tasks.length,
         overdue_count: overdueCount,
         due_today_count: dueTodayCount,
       },
@@ -41,25 +69,30 @@ export function registerReviewRoutes(store: InMemoryStore) {
     });
   }
 
-  function submit(
+  async function submit(
     ctx: RequestContext,
     reviewId: string,
     result: ReviewResult,
-  ): ApiSuccess<unknown> | ApiError {
-    const idemKey = `POST:/reviews/${reviewId}/submit:${ctx.requestId}`;
-    const cached = store.idempotency.get(idemKey);
-    if (cached) {
-      return cached as ApiSuccess<unknown>;
-    }
+  ): Promise<ApiSuccess<unknown> | ApiError> {
+    const db = getDb();
 
-    const task = store.reviews.find((it) => it.reviewId === reviewId);
-    if (!task) return fail(ctx.requestId, "NOT_FOUND", "review not found");
+    const { data: row } = await db
+      .from("review_tasks")
+      .select("*")
+      .eq("id", reviewId)
+      .eq("user_id", ctx.userId)
+      .single();
+
+    if (!row) return fail(ctx.requestId, "NOT_FOUND", "review not found");
+
+    const task = toReviewTask(row);
+
     if (task.status !== "queued") {
       return fail(ctx.requestId, "CONFLICT", "review already processed");
     }
 
     const output = submitReview(task, result, ctx.today, ctx.nowIso, (stage, dueDate) => ({
-      reviewId: `${task.itemId}-${stage}-${Date.now()}`,
+      reviewId: "", // DB가 UUID를 생성
       itemId: task.itemId,
       stage,
       dueDate,
@@ -67,39 +100,69 @@ export function registerReviewRoutes(store: InMemoryStore) {
       completedAt: null,
     }));
 
-    Object.assign(task, output.updatedTask);
+    // 기존 태스크 업데이트
+    if (result === "fail") {
+      // fail: due_date 변경, status는 queued 유지
+      await db
+        .from("review_tasks")
+        .update({ due_date: output.updatedTask.dueDate })
+        .eq("id", reviewId);
+    } else {
+      // success/hard: 완료 처리
+      await db
+        .from("review_tasks")
+        .update({ status: "done", completed_at: ctx.nowIso })
+        .eq("id", reviewId);
+    }
 
+    // 다음 단계 태스크 생성
+    let nextTaskData = null;
     if (output.nextTask) {
-      const duplicateQueued = store.reviews.some(
-        (existing) =>
-          existing.itemId === output.nextTask?.itemId &&
-          existing.stage === output.nextTask?.stage &&
-          existing.status === "queued",
-      );
-      if (!duplicateQueued) {
-        store.reviews.push(output.nextTask as ReviewTask);
+      // 중복 방지
+      const { data: existing } = await db
+        .from("review_tasks")
+        .select("id")
+        .eq("user_id", ctx.userId)
+        .eq("learning_item_id", output.nextTask.itemId)
+        .eq("stage", output.nextTask.stage)
+        .eq("status", "queued")
+        .limit(1);
+
+      if (!existing || existing.length === 0) {
+        const { data: inserted } = await db
+          .from("review_tasks")
+          .insert({
+            user_id: ctx.userId,
+            learning_item_id: output.nextTask.itemId,
+            stage: output.nextTask.stage,
+            due_date: output.nextTask.dueDate,
+            status: "queued",
+          })
+          .select("*")
+          .single();
+
+        if (inserted) {
+          nextTaskData = toReviewTask(inserted);
+        }
       }
     }
 
-    // Record event
-    store.events.push({
-      eventId: `evt-${Date.now()}-review`,
-      userId: store.profile.userId,
-      eventName: "review_completed",
-      entityType: "review_task",
-      entityId: reviewId,
-      payloadJson: { review_id: reviewId, stage: task.stage, result },
-      occurredAt: ctx.nowIso,
+    // 이벤트 기록
+    await db.from("activity_events").insert({
+      user_id: ctx.userId,
+      event_name: "review_completed",
+      entity_type: "review_task",
+      entity_id: reviewId,
+      payload: { review_id: reviewId, stage: task.stage, result },
+      occurred_at: ctx.nowIso,
     });
 
-    const response = ok(ctx.requestId, {
-      review: task,
+    return ok(ctx.requestId, {
+      review: output.updatedTask,
       next_task_created: output.nextTaskCreated,
-      next_task: output.nextTask,
+      next_task: nextTaskData,
       policy_version: output.policyVersion,
     });
-    store.idempotency.set(idemKey, response);
-    return response;
   }
 
   return { getQueue, submit };

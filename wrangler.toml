@@ -1,0 +1,7 @@
+# TinyWords – Cloudflare Pages 설정
+# https://developers.cloudflare.com/pages/functions/wrangler-configuration/
+
+name = "tinywords"
+pages_build_output_dir = "./web"
+compatibility_date = "2026-02-01"
+compatibility_flags = ["nodejs_compat"]

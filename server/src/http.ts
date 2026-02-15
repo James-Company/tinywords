@@ -129,12 +129,16 @@ export function startHttpServer(port = 8080) {
         await sendStaticFile(res, webRoot, "/index.html");
         return;
       }
+      if (method === "GET" && (reqPath === "/terms.html" || reqPath === "/privacy.html")) {
+        await sendStaticFile(res, webRoot, reqPath);
+        return;
+      }
       if (method === "GET" && (reqPath === "/app.js" || reqPath === "/auth.js" || reqPath === "/styles.css" || reqPath === "/i18n.js")) {
         await sendStaticFile(res, webRoot, reqPath);
         return;
       }
 
-      // i18n locale JSON files: /i18n/ko-KR.json, /i18n/en-US.json
+      // i18n locale JSON files
       const i18nMatch = reqPath.match(/^\/i18n\/([a-z]{2}-[A-Z]{2})\.json$/);
       if (method === "GET" && i18nMatch) {
         const localeRoot = nodePath.resolve(nodePath.dirname(currentFile), "../../src/i18n/locales");
@@ -143,9 +147,6 @@ export function startHttpServer(port = 8080) {
       }
 
       // === API Routes (인증 필수) ===
-
-      // 인증 검증: /api/v1/* 엔드포인트는 모두 Bearer 토큰 필요
-      // SSOT: docs/22_AUTH_SPEC.md §7.2
       if (reqPath.startsWith("/api/v1/")) {
         const authResult = await verifyAuth(req.headers.authorization);
         if (isAuthError(authResult)) {
@@ -156,17 +157,16 @@ export function startHttpServer(port = 8080) {
           return;
         }
 
-        // RequestContext에 userId 주입
         const authedCtx = {
           ...ctx,
           userId: authResult.userId,
           userEmail: authResult.userEmail,
         };
 
-        // Auth initialize — 첫 로그인 시 프로필 생성/확인
+        // Auth initialize
         if (method === "POST" && reqPath === "/api/v1/auth/initialize") {
           const body = await readBody(req);
-          const out = app.users.initializeUser(authedCtx, {
+          const out = await app.users.initializeUser(authedCtx, {
             timezone: (body.timezone as string) || undefined,
           });
           sendJson(res, mapStatus(out), out);
@@ -175,18 +175,18 @@ export function startHttpServer(port = 8080) {
 
         // User profile
         if (method === "GET" && reqPath === "/api/v1/users/me/profile") {
-          const out = app.users.getProfile(authedCtx);
+          const out = await app.users.getProfile(authedCtx);
           sendJson(res, mapStatus(out), out);
           return;
         }
         if (method === "PATCH" && reqPath === "/api/v1/users/me/profile") {
           const body = await readBody(req);
-          const out = app.users.patchProfile(authedCtx, body);
+          const out = await app.users.patchProfile(authedCtx, body);
           sendJson(res, mapStatus(out), out);
           return;
         }
         if (method === "POST" && reqPath === "/api/v1/users/me/reset") {
-          const out = app.users.resetData(authedCtx);
+          const out = await app.users.resetData(authedCtx);
           sendJson(res, mapStatus(out), out);
           return;
         }
@@ -202,21 +202,21 @@ export function startHttpServer(port = 8080) {
         const planItemMatch = reqPath.match(/^\/api\/v1\/day-plans\/([^/]+)\/items\/([^/]+)$/);
         if (method === "PATCH" && planItemMatch) {
           const body = await readBody(req);
-          const out = app.dayPlans.patchPlanItem(authedCtx, planItemMatch[1], planItemMatch[2], body);
+          const out = await app.dayPlans.patchPlanItem(authedCtx, planItemMatch[1], planItemMatch[2], body);
           sendJson(res, mapStatus(out), out);
           return;
         }
 
         const planCompleteMatch = reqPath.match(/^\/api\/v1\/day-plans\/([^/]+)\/complete$/);
         if (method === "POST" && planCompleteMatch) {
-          const out = app.dayPlans.completePlan(authedCtx, planCompleteMatch[1]);
+          const out = await app.dayPlans.completePlan(authedCtx, planCompleteMatch[1]);
           sendJson(res, mapStatus(out), out);
           return;
         }
 
         // Reviews / Inbox
         if (method === "GET" && reqPath === "/api/v1/reviews/queue") {
-          const out = app.reviews.getQueue(authedCtx);
+          const out = await app.reviews.getQueue(authedCtx);
           sendJson(res, mapStatus(out), out);
           return;
         }
@@ -224,7 +224,7 @@ export function startHttpServer(port = 8080) {
         const reviewSubmitMatch = reqPath.match(/^\/api\/v1\/reviews\/([^/]+)\/submit$/);
         if (method === "POST" && reviewSubmitMatch) {
           const body = await readBody(req);
-          const out = app.reviews.submit(
+          const out = await app.reviews.submit(
             authedCtx,
             reviewSubmitMatch[1],
             (body.result as "success" | "hard" | "fail") ?? "fail",
@@ -236,7 +236,7 @@ export function startHttpServer(port = 8080) {
         // History
         if (method === "GET" && reqPath === "/api/v1/history") {
           const type = url.searchParams.get("type") || "all";
-          const out = app.history.getHistory(authedCtx, type);
+          const out = await app.history.getHistory(authedCtx, type);
           sendJson(res, mapStatus(out), out);
           return;
         }
@@ -259,7 +259,7 @@ export function startHttpServer(port = 8080) {
         // Speech
         if (method === "POST" && reqPath === "/api/v1/speech-attempts") {
           const body = await readBody(req);
-          const out = app.speech.createAttempt(authedCtx, body as never);
+          const out = await app.speech.createAttempt(authedCtx, body as never);
           sendJson(res, mapStatus(out), out);
           return;
         }
@@ -267,7 +267,7 @@ export function startHttpServer(port = 8080) {
         const speechScoreMatch = reqPath.match(/^\/api\/v1\/speech\/([^/]+)\/score$/);
         if (method === "PATCH" && speechScoreMatch) {
           const body = await readBody(req);
-          const out = app.speech.updateScore(authedCtx, speechScoreMatch[1], body as never);
+          const out = await app.speech.updateScore(authedCtx, speechScoreMatch[1], body as never);
           sendJson(res, mapStatus(out), out);
           return;
         }

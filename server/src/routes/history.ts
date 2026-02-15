@@ -2,17 +2,12 @@
  * SSOT: docs/07_SCREEN_SPEC_HISTORY.md, docs/15_API_CONTRACT.md
  */
 import { ok, type ApiSuccess } from "../../../src/api/contract";
-import type { InMemoryStore } from "../store";
-
-interface RequestContext {
-  requestId: string;
-  nowIso: string;
-  today: string;
-}
+import { getDb } from "../db";
+import type { RequestContext } from "../context";
 
 interface HistoryDay {
   plan_date: string;
-  dayplan_status: "open" | "completed" | "expired";
+  dayplan_status: "open" | "completed";
   learning_done: number;
   learning_target: number;
   review_done: number;
@@ -28,87 +23,92 @@ interface HistoryDay {
   }>;
 }
 
-export function registerHistoryRoutes(store: InMemoryStore) {
-  function getHistory(
+export function registerHistoryRoutes() {
+  async function getHistory(
     ctx: RequestContext,
     _type: string = "all",
-  ): ApiSuccess<unknown> {
+  ): Promise<ApiSuccess<unknown>> {
+    const db = getDb();
+
+    // 모든 플랜 (최신순)
+    const { data: plans } = await db
+      .from("day_plans")
+      .select("*")
+      .eq("user_id", ctx.userId)
+      .order("plan_date", { ascending: false })
+      .limit(30);
+
     const days: HistoryDay[] = [];
 
-    // Current today plan
-    if (store.todayPlan) {
-      const completedCount = store.todayPlan.items.filter((i) => i.isCompleted).length;
-      const reviewsDoneToday = store.reviews.filter(
-        (r) => r.status === "done" && r.completedAt?.slice(0, 10) === store.todayPlan!.planDate,
-      ).length;
-      const reviewsPending = store.reviews.filter(
-        (r) => r.status === "queued" && r.dueDate <= store.todayPlan!.planDate,
+    for (const plan of plans ?? []) {
+      const { data: items } = await db
+        .from("plan_items")
+        .select("*")
+        .eq("plan_id", plan.id)
+        .order("order_num");
+
+      const planDate = (plan.plan_date as string).slice(0, 10);
+      const completedCount = (items ?? []).filter(
+        (i: Record<string, unknown>) => i.is_completed === true,
       ).length;
 
+      // 해당 날짜의 리뷰 통계
+      const { count: reviewsDone } = await db
+        .from("review_tasks")
+        .select("*", { count: "exact", head: true })
+        .eq("user_id", ctx.userId)
+        .eq("status", "done")
+        .gte("completed_at", `${planDate}T00:00:00`)
+        .lt("completed_at", `${planDate}T23:59:59.999`);
+
+      const { count: reviewsPending } = await db
+        .from("review_tasks")
+        .select("*", { count: "exact", head: true })
+        .eq("user_id", ctx.userId)
+        .eq("status", "queued")
+        .lte("due_date", planDate);
+
       days.push({
-        plan_date: store.todayPlan.planDate,
-        dayplan_status: store.todayPlan.status,
+        plan_date: planDate,
+        dayplan_status: plan.status as "open" | "completed",
         learning_done: completedCount,
-        learning_target: store.todayPlan.dailyTarget,
-        review_done: reviewsDoneToday,
-        review_pending: reviewsPending,
-        items: store.todayPlan.items.map((item) => ({
-          lemma: item.lemma,
-          meaning_ko: item.meaningKo,
-          item_type: item.itemType,
-          recall_status: item.recallStatus,
-          sentence_status: item.sentenceStatus,
-          speech_status: item.speechStatus,
-          is_completed: item.isCompleted,
+        learning_target: plan.daily_target as number,
+        review_done: reviewsDone ?? 0,
+        review_pending: plan.status === "open" ? (reviewsPending ?? 0) : 0,
+        items: (items ?? []).map((item: Record<string, unknown>) => ({
+          lemma: item.lemma as string,
+          meaning_ko: item.meaning_ko as string,
+          item_type: item.item_type as string,
+          recall_status: item.recall_status as string,
+          sentence_status: item.sentence_status as string,
+          speech_status: item.speech_status as string,
+          is_completed: item.is_completed as boolean,
         })),
       });
     }
 
-    // Historical completed plans
-    for (const plan of [...store.completedPlans].reverse()) {
-      const completedCount = plan.items.filter((i) => i.isCompleted).length;
-      const reviewsDone = store.reviews.filter(
-        (r) => r.status === "done" && r.completedAt?.slice(0, 10) === plan.planDate,
-      ).length;
+    // streak 조회
+    const { data: streak } = await db
+      .from("streak_states")
+      .select("*")
+      .eq("user_id", ctx.userId)
+      .single();
 
-      days.push({
-        plan_date: plan.planDate,
-        dayplan_status: plan.status,
-        learning_done: completedCount,
-        learning_target: plan.dailyTarget,
-        review_done: reviewsDone,
-        review_pending: 0,
-        items: plan.items.map((item) => ({
-          lemma: item.lemma,
-          meaning_ko: item.meaningKo,
-          item_type: item.itemType,
-          recall_status: item.recallStatus,
-          sentence_status: item.sentenceStatus,
-          speech_status: item.speechStatus,
-          is_completed: item.isCompleted,
-        })),
-      });
-    }
-
-    // Sort by date desc
-    days.sort((a, b) => (a.plan_date > b.plan_date ? -1 : a.plan_date < b.plan_date ? 1 : 0));
-
-    // Record event
-    store.events.push({
-      eventId: `evt-${Date.now()}-history`,
-      userId: store.profile.userId,
-      eventName: "history_opened",
-      entityType: null,
-      entityId: null,
-      payloadJson: { record_count: days.length },
-      occurredAt: ctx.nowIso,
+    // 이벤트 기록
+    await db.from("activity_events").insert({
+      user_id: ctx.userId,
+      event_name: "history_opened",
+      entity_type: null,
+      entity_id: null,
+      payload: { record_count: days.length },
+      occurred_at: ctx.nowIso,
     });
 
     return ok(ctx.requestId, {
       streak: {
-        current_streak_days: store.streak.currentStreak,
-        best_streak_days: store.streak.longestStreak,
-        last_completed_date: store.streak.lastCompletedDate,
+        current_streak_days: streak?.current_streak ?? 0,
+        best_streak_days: streak?.longest_streak ?? 0,
+        last_completed_date: streak?.last_completed_date ?? null,
       },
       days,
     });

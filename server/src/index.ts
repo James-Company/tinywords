@@ -1,5 +1,5 @@
 /**
- * TinyWords API 서버 엔트리(인메모리 구현)
+ * TinyWords API 서버 엔트리 (Supabase PostgreSQL)
  */
 import { registerDayPlanRoutes } from "./routes/day-plans";
 import { registerReviewRoutes } from "./routes/reviews";
@@ -7,7 +7,6 @@ import { registerAiRoutes } from "./routes/ai";
 import { registerSpeechRoutes } from "./routes/speech";
 import { registerUserRoutes } from "./routes/users";
 import { registerHistoryRoutes } from "./routes/history";
-import { createStore } from "./store";
 
 /**
  * 지정 타임존 기준 오늘 날짜(YYYY-MM-DD)를 반환한다.
@@ -27,7 +26,6 @@ function getTodayForTimezone(timeZone: string, refDate?: Date): string {
       day: "2-digit",
     }).format(d);
   } catch {
-    // 잘못된 타임존이 들어오면 기본값 사용
     return new Intl.DateTimeFormat("en-CA", {
       timeZone: DEFAULT_TIMEZONE,
       year: "numeric",
@@ -38,14 +36,12 @@ function getTodayForTimezone(timeZone: string, refDate?: Date): string {
 }
 
 export function createServer() {
-  const today = getTodayForTimezone(DEFAULT_TIMEZONE);
-  const store = createStore(today);
-  const dayPlans = registerDayPlanRoutes(store);
-  const reviews = registerReviewRoutes(store);
-  const users = registerUserRoutes(store);
-  const ai = registerAiRoutes(store);
-  const speech = registerSpeechRoutes({ attempts: store.speechAttempts });
-  const history = registerHistoryRoutes(store);
+  const dayPlans = registerDayPlanRoutes();
+  const reviews = registerReviewRoutes();
+  const users = registerUserRoutes();
+  const ai = registerAiRoutes();
+  const speech = registerSpeechRoutes();
+  const history = registerHistoryRoutes();
 
   function createContext(
     requestId: string,

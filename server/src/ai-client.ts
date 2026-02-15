@@ -16,7 +16,7 @@ import {
   type WordGenerationOutput,
   PROMPT_VERSION,
 } from "../../src/ai/prompts";
-import { getWordPool, type LearningItem } from "./store";
+import { pickFallbackWords } from "./fallback-words";
 
 const MAX_RETRIES = 1;
 
@@ -67,19 +67,15 @@ function fallbackFromPool(
   dailyTarget: number,
   avoidWords: string[],
 ): WordGenerationItem[] {
-  const avoidSet = new Set(avoidWords.map((w) => w.toLowerCase()));
-  const pool = getWordPool();
-  const available = pool.filter((w) => w.isActive && !avoidSet.has(w.lemma.toLowerCase()));
-  const shuffled = [...available].sort(() => Math.random() - 0.5);
-  const selected = shuffled.slice(0, dailyTarget);
+  const selected = pickFallbackWords(dailyTarget, avoidWords);
 
   return selected.map((w) => ({
-    item_type: w.itemType,
+    item_type: w.item_type,
     lemma: w.lemma,
-    meaning_ko: w.meaningKo,
-    part_of_speech: w.partOfSpeech,
-    example_en: w.exampleEn,
-    example_ko: w.exampleKo,
+    meaning_ko: w.meaning_ko,
+    part_of_speech: w.part_of_speech,
+    example_en: w.example_en,
+    example_ko: w.example_ko,
     difficulty: "A2",
     tags: ["general"],
   }));
@@ -146,9 +142,19 @@ export async function generateWords(input: WordGenerationInput): Promise<Generat
 /**
  * AI 생성 결과를 LearningItem 형태로 변환
  */
-export function toLeajaItems(items: WordGenerationItem[]): LearningItem[] {
-  return items.map((item, i) => ({
-    itemId: `ai-${Date.now()}-${i}`,
+export interface LearningItemData {
+  itemType: string;
+  lemma: string;
+  meaningKo: string;
+  partOfSpeech: string;
+  exampleEn: string;
+  exampleKo: string;
+  source: "ai_generated" | "user_added" | "edited";
+  isActive: boolean;
+}
+
+export function toLeajaItems(items: WordGenerationItem[]): LearningItemData[] {
+  return items.map((item) => ({
     itemType: item.item_type,
     lemma: item.lemma,
     meaningKo: item.meaning_ko,
@@ -157,6 +163,5 @@ export function toLeajaItems(items: WordGenerationItem[]): LearningItem[] {
     exampleKo: item.example_ko,
     source: "ai_generated" as const,
     isActive: true,
-    createdAt: new Date().toISOString(),
   }));
 }

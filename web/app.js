@@ -1142,6 +1142,30 @@ function renderAll() {
 function showAuthScreen() {
   document.getElementById("auth-screen").classList.remove("hidden");
   document.getElementById("main-app").classList.add("hidden");
+  resetAuthForms();
+}
+
+/**
+ * 인증 폼 전체 초기화 — 입력값, 체크박스, 에러 메시지 모두 리셋
+ */
+function resetAuthForms() {
+  // 모든 input 필드 초기화
+  document
+    .querySelectorAll("#auth-screen input[type='email'], #auth-screen input[type='password'], #auth-screen input[type='text']")
+    .forEach((el) => { el.value = ""; });
+
+  // 체크박스 초기화
+  document
+    .querySelectorAll("#auth-screen input[type='checkbox']")
+    .forEach((el) => { el.checked = false; });
+
+  // 에러/성공 메시지 숨기기
+  document
+    .querySelectorAll("#auth-screen .auth-error, #auth-screen .auth-success")
+    .forEach((el) => { el.classList.add("hidden"); el.textContent = ""; });
+
+  // 기본 폼(로그인)으로 전환
+  showAuthForm("auth-login-form");
 }
 
 function showMainApp() {
@@ -1154,7 +1178,14 @@ function showAuthForm(formId) {
   document.querySelectorAll(".auth-form, .auth-confirm-notice").forEach((el) => {
     el.classList.add("hidden");
   });
-  document.getElementById(formId).classList.remove("hidden");
+
+  // 전환 대상 폼의 입력값 초기화
+  const target = document.getElementById(formId);
+  target.querySelectorAll("input[type='email'], input[type='password'], input[type='text']").forEach((el) => { el.value = ""; });
+  target.querySelectorAll("input[type='checkbox']").forEach((el) => { el.checked = false; });
+  target.querySelectorAll(".auth-error, .auth-success").forEach((el) => { el.classList.add("hidden"); el.textContent = ""; });
+
+  target.classList.remove("hidden");
 }
 
 function showAuthError(elementId, message) {
@@ -1232,11 +1263,26 @@ function bindAuthUI() {
 
     const email = document.getElementById("signup-email").value.trim();
     const password = document.getElementById("signup-password").value;
+    const passwordConfirm = document.getElementById("signup-password-confirm").value;
+    const termsChecked = document.getElementById("signup-terms").checked;
+    const privacyChecked = document.getElementById("signup-privacy").checked;
 
     const emailErr = validateEmail(email);
     if (emailErr) { showAuthError("signup-error", emailErr); return; }
     const passErr = validatePassword(password);
     if (passErr) { showAuthError("signup-error", passErr); return; }
+    if (password !== passwordConfirm) {
+      showAuthError("signup-error", "비밀번호가 일치하지 않습니다.");
+      return;
+    }
+    if (!termsChecked) {
+      showAuthError("signup-error", "이용약관에 동의해주세요.");
+      return;
+    }
+    if (!privacyChecked) {
+      showAuthError("signup-error", "개인정보처리방침에 동의해주세요.");
+      return;
+    }
 
     setAuthLoading("signup-submit-btn", true);
     const result = await signUpWithEmail(email, password);
@@ -1273,6 +1319,81 @@ function bindAuthUI() {
     } else {
       showAuthError("reset-error", result.error);
     }
+  });
+
+  // 전체 동의 체크박스 토글
+  const agreeAllCheckbox = document.getElementById("signup-agree-all");
+  const termsCheckbox = document.getElementById("signup-terms");
+  const privacyCheckbox = document.getElementById("signup-privacy");
+
+  agreeAllCheckbox.addEventListener("change", () => {
+    const checked = agreeAllCheckbox.checked;
+    termsCheckbox.checked = checked;
+    privacyCheckbox.checked = checked;
+  });
+
+  // 개별 체크박스 변경 시 전체동의 상태 동기화
+  function syncAgreeAll() {
+    agreeAllCheckbox.checked = termsCheckbox.checked && privacyCheckbox.checked;
+  }
+  termsCheckbox.addEventListener("change", syncAgreeAll);
+  privacyCheckbox.addEventListener("change", syncAgreeAll);
+
+  // 약관/개인정보 모달
+  const legalOverlay = document.getElementById("legal-modal-overlay");
+  const legalTitle = document.getElementById("legal-modal-title");
+  const legalBody = document.getElementById("legal-modal-body");
+  const legalCache = {};
+
+  async function openLegalModal(type) {
+    const url = type === "terms" ? "/terms.html" : "/privacy.html";
+    const title = type === "terms" ? "이용약관" : "개인정보처리방침";
+    legalTitle.textContent = title;
+    legalBody.innerHTML = `<div class="loading-spinner">불러오는 중...</div>`;
+    legalOverlay.classList.remove("hidden");
+
+    if (legalCache[type]) {
+      legalBody.innerHTML = legalCache[type];
+      return;
+    }
+
+    try {
+      const res = await fetch(url);
+      const html = await res.text();
+      // HTML에서 <div class="legal-page">...</div> 본문만 추출
+      const match = html.match(/<div class="legal-page">([\s\S]*?)<\/div>\s*<\/body>/);
+      if (match) {
+        // "돌아가기" 링크와 제목/날짜 제거 (모달에선 불필요)
+        let content = match[1];
+        content = content.replace(/<a[^>]*class="legal-back"[^>]*>.*?<\/a>/g, "");
+        content = content.replace(/<h1>.*?<\/h1>/g, "");
+        content = content.replace(/<p class="updated">.*?<\/p>/g, "");
+        legalCache[type] = content.trim();
+        legalBody.innerHTML = legalCache[type];
+      } else {
+        legalBody.innerHTML = `<p>내용을 불러올 수 없습니다. <a href="${url}" target="_blank">새 탭에서 보기</a></p>`;
+      }
+    } catch {
+      legalBody.innerHTML = `<p>내용을 불러올 수 없습니다. <a href="${url}" target="_blank">새 탭에서 보기</a></p>`;
+    }
+  }
+
+  function closeLegalModal() {
+    legalOverlay.classList.add("hidden");
+  }
+
+  document.getElementById("legal-modal-close").addEventListener("click", closeLegalModal);
+  legalOverlay.addEventListener("click", (e) => {
+    if (e.target === legalOverlay) closeLegalModal();
+  });
+
+  // [data-legal] 링크 클릭 시 모달 열기
+  document.querySelectorAll("[data-legal]").forEach((link) => {
+    link.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation(); // 체크박스 토글 방지
+      openLegalModal(link.dataset.legal);
+    });
   });
 
   // Google 로그인
