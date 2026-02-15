@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+  <rect width="96" height="96" rx="17" fill="#6E5B45"/>
+  <text x="50%" y="42%" text-anchor="middle" dominant-baseline="middle"
+        font-family="serif" font-size="34" font-weight="bold" fill="#FFFDF8">Tw</text>
+  <text x="50%" y="68%" text-anchor="middle" dominant-baseline="middle"
+        font-family="sans-serif" font-size="12" fill="#FFFDF8" opacity="0.8">TinyWords</text>
+</svg>

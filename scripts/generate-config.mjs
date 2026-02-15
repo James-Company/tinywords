@@ -2,7 +2,13 @@
  * 빌드 시 web/config.js를 환경변수로부터 생성한다.
  *
  * 개발 환경에서는 Node.js 서버가 /config.js를 동적으로 제공하지만,
- * 프로덕션(Cloudflare Pages)에서는 정적 파일로 존재해야 한다.
+ * 프로덕션(Cloudflare Pages) 및 Capacitor 네이티브 빌드에서는
+ * 정적 파일로 존재해야 한다.
+ *
+ * 환경변수 로드 우선순위:
+ *   1. 셸 환경변수 (CI/CD)
+ *   2. .env.production (프로덕션 빌드)
+ *   3. .env.development (개발 빌드)
  *
  * 필요한 환경변수:
  *   SUPABASE_URL        — Supabase 프로젝트 URL
@@ -10,7 +16,38 @@
  *   VAPID_PUBLIC_KEY     — 웹 푸시 VAPID 공개 키
  */
 
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const ROOT = resolve(__dirname, "..");
+
+/**
+ * .env 파일을 파싱하여 key=value 쌍을 반환한다.
+ * 셸 환경변수가 이미 설정되어 있으면 덮어쓰지 않는다.
+ */
+function loadEnvFile(filePath) {
+  if (!existsSync(filePath)) return;
+  const lines = readFileSync(filePath, "utf-8").split("\n");
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eqIdx = trimmed.indexOf("=");
+    if (eqIdx === -1) continue;
+    const key = trimmed.slice(0, eqIdx).trim();
+    const value = trimmed.slice(eqIdx + 1).trim();
+    // 셸 환경변수가 이미 있으면 유지 (CI/CD 우선)
+    if (!process.env[key]) {
+      process.env[key] = value;
+    }
+  }
+}
+
+// 환경에 따라 .env 파일 로드
+const envMode = process.env.NODE_ENV || "development";
+loadEnvFile(resolve(ROOT, `.env.${envMode}`));
+loadEnvFile(resolve(ROOT, ".env.development")); // fallback
 
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || "";

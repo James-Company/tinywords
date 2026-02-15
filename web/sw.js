@@ -1,13 +1,68 @@
 /**
- * TinyWords Service Worker — Web Push 알림 수신 및 표시
+ * TinyWords Service Worker — 캐시 + Web Push 알림
  */
 
+const CACHE_NAME = "tinywords-v1";
+const STATIC_ASSETS = [
+  "/",
+  "/index.html",
+  "/app.js",
+  "/auth.js",
+  "/styles.css",
+  "/manifest.json",
+];
+
 self.addEventListener("install", (event) => {
+  event.waitUntil(
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_ASSETS)),
+  );
   self.skipWaiting();
 });
 
 self.addEventListener("activate", (event) => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(
+    caches.keys().then((keys) =>
+      Promise.all(
+        keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)),
+      ),
+    ),
+  );
+  self.clients.claim();
+});
+
+// Network-first 전략: API 요청은 네트워크 우선, 실패 시 캐시
+// Cache-first 전략: 정적 에셋은 캐시 우선, 없으면 네트워크
+self.addEventListener("fetch", (event) => {
+  const { request } = event;
+
+  // API 요청은 네트워크 우선
+  if (request.url.includes("/api/")) {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+          return response;
+        })
+        .catch(() => caches.match(request)),
+    );
+    return;
+  }
+
+  // 정적 에셋은 캐시 우선
+  if (request.method === "GET") {
+    event.respondWith(
+      caches.match(request).then((cached) => {
+        if (cached) return cached;
+        return fetch(request).then((response) => {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+          return response;
+        });
+      }),
+    );
+    return;
+  }
 });
 
 self.addEventListener("push", (event) => {
