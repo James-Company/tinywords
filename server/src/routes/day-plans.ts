@@ -72,8 +72,11 @@ export function registerDayPlanRoutes() {
 
       const plan = toDayPlan(planRow, items ?? []);
       const itemIds = (items ?? []).map((r: Record<string, unknown>) => r.id as string);
-      const speechAttempts = await fetchSpeechAttempts(itemIds);
-      return ok(ctx.requestId, { ...plan, speechAttempts });
+      const [speechAttempts, savedSentences] = await Promise.all([
+        fetchSpeechAttempts(itemIds),
+        fetchSentenceAttempts(itemIds),
+      ]);
+      return ok(ctx.requestId, { ...plan, speechAttempts, savedSentences });
     }
 
     if (!createIfMissing) {
@@ -211,7 +214,7 @@ export function registerDayPlanRoutes() {
       occurred_at: ctx.nowIso,
     });
 
-    return ok(ctx.requestId, { ...toDayPlan(newPlan, insertedItems ?? []), speechAttempts: {} });
+    return ok(ctx.requestId, { ...toDayPlan(newPlan, insertedItems ?? []), speechAttempts: {}, savedSentences: {} });
   }
 
   async function patchPlanItem(
@@ -222,6 +225,7 @@ export function registerDayPlanRoutes() {
       recallStatus?: "pending" | "success" | "fail";
       sentenceStatus?: "pending" | "done" | "skipped";
       speechStatus?: "pending" | "done" | "skipped";
+      userSentence?: string;
     },
   ): Promise<ApiSuccess<unknown> | ApiError> {
     const db = getDb();
@@ -268,6 +272,15 @@ export function registerDayPlanRoutes() {
         is_completed: merged.isCompleted,
       })
       .eq("id", planItemId);
+
+    // 문장 저장 (sentenceStatus === "done" && 문장이 있을 때)
+    if (input.userSentence && merged.sentenceStatus === "done") {
+      await db.from("sentence_attempts").insert({
+        user_id: ctx.userId,
+        plan_item_id: planItemId,
+        sentence_en: input.userSentence,
+      });
+    }
 
     // 이벤트 기록
     const stepType = input.recallStatus ? "recall" : input.sentenceStatus ? "sentence" : "speech";
@@ -460,6 +473,30 @@ async function fetchSpeechAttempts(
         score: sa.pronunciation_score as number | null,
         durationMs: sa.duration_ms as number,
       };
+    }
+  }
+  return result;
+}
+
+// ── Sentence Attempts 조회 헬퍼 ──────────────────────────────
+
+async function fetchSentenceAttempts(
+  itemIds: string[],
+): Promise<Record<string, string>> {
+  if (itemIds.length === 0) return {};
+
+  const db = getDb();
+  const { data: attempts } = await db
+    .from("sentence_attempts")
+    .select("plan_item_id, sentence_en")
+    .in("plan_item_id", itemIds)
+    .order("created_at", { ascending: false });
+
+  const result: Record<string, string> = {};
+  for (const sa of (attempts ?? [])) {
+    const planItemId = sa.plan_item_id as string;
+    if (!result[planItemId]) {
+      result[planItemId] = sa.sentence_en as string;
     }
   }
   return result;

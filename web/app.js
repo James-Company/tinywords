@@ -342,6 +342,7 @@ async function loadTodayData() {
     ]);
     state.plan = planRes;
     restoreRecordingsFromServer(planRes);
+    restoreSentencesFromServer(planRes);
     state.reviews = queueRes.tasks || [];
     todayLoaded = true;
     renderToday();
@@ -355,6 +356,7 @@ async function refreshToday() {
     const planRes = await api("/api/v1/day-plans/today?create_if_missing=true");
     state.plan = planRes;
     restoreRecordingsFromServer(planRes);
+    restoreSentencesFromServer(planRes);
     renderToday();
   } catch (err) {
     showError(t("errors.network"));
@@ -409,6 +411,17 @@ function restoreRecordingsFromServer(planRes) {
       recognition: null,
       recognizedText: "",
     };
+  }
+}
+
+// ─── Sentence Drafts 복원 ───
+/** 서버에서 받은 savedSentences 데이터를 state.sentenceDrafts에 복원한다 */
+function restoreSentencesFromServer(planRes) {
+  if (!planRes || !planRes.savedSentences) return;
+  for (const [planItemId, sentence] of Object.entries(planRes.savedSentences)) {
+    // 로컬에 이미 입력 중인 문장이 있으면 덮어쓰지 않음
+    if (state.sentenceDrafts[planItemId]) continue;
+    state.sentenceDrafts[planItemId] = sentence;
   }
 }
 
@@ -471,7 +484,7 @@ async function requestSentenceCoach(item) {
 
     // "good"일 때만 완료 처리, needs_fix/retry면 수정 가능
     if (result.overall === "good") {
-      await patchItem(item.planItemId, { sentenceStatus: "done" });
+      await patchItem(item.planItemId, { sentenceStatus: "done", userSentence: sentence });
     } else {
       renderToday();
     }
