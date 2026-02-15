@@ -124,12 +124,33 @@ Return JSON only. Output schema:
 }
 
 // ── Sentence Coach ──────────────────────────────────────────────
+// SSOT: docs/10_AI_SENTENCE_COACH_PROMPT.md
 
 export interface SentenceCoachInput {
   sentence_en: string;
   item_context: {
     lemma: string;
     meaning_ko: string;
+    example_en?: string;
+  };
+}
+
+export interface SentenceCoachResult {
+  overall: "good" | "needs_fix" | "retry";
+  score: number;
+  feedback_ko: string;
+  highlights: Array<{ type: string; message_ko: string }>;
+  suggestions: string[];
+  next_action_ko: string;
+}
+
+export interface SentenceCoachOutput {
+  result: SentenceCoachResult;
+  meta: {
+    prompt_version: string;
+    generated_at: string;
+    safety: { contains_sensitive_content: boolean };
+    error_code?: string;
   };
 }
 
@@ -142,6 +163,76 @@ export function validateSentenceCoachInput(input: SentenceCoachInput): string[] 
     errors.push("item_context.lemma is required");
   }
   return errors;
+}
+
+/**
+ * 문장 코칭 시스템 프롬프트 — SSOT: docs/10 §5
+ */
+export function buildSentenceCoachSystemPrompt(): string {
+  return `You are TinyWords Sentence Coach for Korean English learners.
+You coach the user to improve one sentence using the target learning item.
+
+Hard requirements:
+1) Output valid JSON only. No markdown, no prose.
+2) Follow the output schema exactly.
+3) Be concise, supportive, and action-oriented.
+4) Prioritize recall and self-correction over giving final answers immediately.
+5) Respect user level and avoid overly advanced explanations.
+6) Keep suggestions to max 2 alternatives.
+7) Do not include unsafe, hateful, sexual, violent, or personally identifying content.
+8) If input is invalid or empty, return:
+   {"result":{"overall":"retry","score":0,"feedback_ko":"문장을 다시 입력해 주세요.","highlights":[],"suggestions":[],"next_action_ko":"핵심 단어를 넣어 한 문장을 써보세요."},"meta":{"error_code":"INVALID_INPUT"}}
+
+Output schema:
+{
+  "result": {
+    "overall": "good|needs_fix|retry",
+    "score": 0-100,
+    "feedback_ko": "한국어 피드백",
+    "highlights": [{"type": "grammar|vocabulary|preposition|punctuation|length", "message_ko": "한국어 설명"}],
+    "suggestions": ["improved sentence 1", "improved sentence 2"],
+    "next_action_ko": "한국어 다음 행동"
+  },
+  "meta": {
+    "prompt_version": "tw-scoach-v1",
+    "generated_at": "<ISO timestamp>",
+    "safety": {"contains_sensitive_content": false}
+  }
+}`;
+}
+
+/**
+ * 문장 코칭 사용자 프롬프트 — SSOT: docs/10 §6
+ */
+export function buildSentenceCoachUserPrompt(input: SentenceCoachInput): string {
+  const exampleEn = input.item_context.example_en || "(none)";
+
+  return `Coach this learner sentence for TinyWords.
+
+Learner context:
+- level: A2
+- focus: general
+
+Target item:
+- lemma: ${input.item_context.lemma}
+- meaning_ko: ${input.item_context.meaning_ko}
+- reference_example: ${exampleEn}
+
+User sentence:
+- sentence_en: ${input.sentence_en}
+
+Coaching goals:
+- Explain what is good first
+- Show 1-2 key fixes only
+- Give at most 2 improved suggestions that preserve the user's original meaning
+- End with one clear next action in Korean
+
+Scoring guide:
+- good (85-100): meaning clear, no critical errors
+- needs_fix (50-84): meaning OK but grammar/vocab issues
+- retry (0-49): sentence empty or target word completely missing
+
+Return JSON only.`;
 }
 
 // ── Validation helpers ──────────────────────────────────────────

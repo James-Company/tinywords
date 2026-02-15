@@ -12,6 +12,7 @@ import {
   signUpWithEmail,
   signInWithGoogle,
   signOut,
+  deleteAccount,
   resetPassword,
   validateEmail,
   validatePassword,
@@ -29,6 +30,7 @@ const state = {
   activeTab: "today",
   historyFilter: "all",
   expandedDays: new Set(),
+  expandedCards: new Set(),
 };
 
 // ─── Timezone (auto-detect via Intl) ───
@@ -106,6 +108,107 @@ function showToast(msg) {
   el.textContent = msg;
   el.classList.remove("hidden");
   setTimeout(() => el.classList.add("hidden"), 2500);
+}
+
+// ─── Push Notification Helpers ───
+
+/**
+ * 서비스 워커를 등록하고, 알림 권한을 요청한 뒤 푸시 구독을 생성하여 서버에 저장한다.
+ * @returns {Promise<boolean>} 구독 성공 여부
+ */
+async function subscribePushNotifications() {
+  // 브라우저 지원 확인
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+    showToast(t("settings.notification.not_supported"));
+    return false;
+  }
+
+  // 알림 권한 요청
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") {
+    showToast(t("settings.notification.permission_denied"));
+    return false;
+  }
+
+  try {
+    // 서비스 워커 등록
+    const registration = await navigator.serviceWorker.register("/sw.js");
+    await navigator.serviceWorker.ready;
+
+    // VAPID 공개키를 config.js에서 가져오기
+    const { VAPID_PUBLIC_KEY } = await import("./config.js");
+    if (!VAPID_PUBLIC_KEY) {
+      console.error("[push] VAPID_PUBLIC_KEY not configured");
+      return false;
+    }
+
+    // urlBase64ToUint8Array 변환
+    const applicationServerKey = urlBase64ToUint8Array(VAPID_PUBLIC_KEY);
+
+    // 기존 구독이 있으면 재활용, 없으면 새로 생성
+    let subscription = await registration.pushManager.getSubscription();
+    if (!subscription) {
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey,
+      });
+    }
+
+    // 서버에 구독 정보 전송
+    const subJson = subscription.toJSON();
+    await api("/api/v1/notifications/subscribe", {
+      method: "POST",
+      body: JSON.stringify({
+        endpoint: subJson.endpoint,
+        keys: subJson.keys,
+      }),
+    });
+
+    return true;
+  } catch (err) {
+    console.error("[push] Subscribe error:", err);
+    showToast(t("settings.notification.subscribe_fail"));
+    return false;
+  }
+}
+
+/**
+ * 푸시 구독을 해제하고 서버에서도 제거한다.
+ */
+async function unsubscribePushNotifications() {
+  try {
+    if (!("serviceWorker" in navigator)) return;
+
+    const registration = await navigator.serviceWorker.getRegistration();
+    if (!registration) return;
+
+    const subscription = await registration.pushManager.getSubscription();
+    if (subscription) {
+      // 서버에서 구독 제거
+      await api("/api/v1/notifications/unsubscribe", {
+        method: "POST",
+        body: JSON.stringify({ endpoint: subscription.endpoint }),
+      });
+      // 브라우저에서도 구독 해제
+      await subscription.unsubscribe();
+    }
+  } catch (err) {
+    console.error("[push] Unsubscribe error:", err);
+  }
+}
+
+/**
+ * VAPID 공개키를 PushManager에서 사용하는 Uint8Array로 변환
+ */
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
 }
 
 function showError(msg) {
@@ -222,6 +325,7 @@ async function loadTodayData() {
       api("/api/v1/reviews/queue"),
     ]);
     state.plan = planRes;
+    restoreRecordingsFromServer(planRes);
     state.reviews = queueRes.tasks || [];
     todayLoaded = true;
     renderToday();
@@ -232,7 +336,9 @@ async function loadTodayData() {
 
 async function refreshToday() {
   try {
-    state.plan = await api("/api/v1/day-plans/today?create_if_missing=true");
+    const planRes = await api("/api/v1/day-plans/today?create_if_missing=true");
+    state.plan = planRes;
+    restoreRecordingsFromServer(planRes);
     renderToday();
   } catch (err) {
     showError(t("errors.network"));
@@ -264,6 +370,29 @@ async function refreshSettings() {
     renderSettings();
   } catch (err) {
     showError(t("errors.load_settings"));
+  }
+}
+
+// ─── Speech Attempts 복원 ───
+/** 서버에서 받은 speechAttempts 데이터를 state.recordings에 복원한다 */
+function restoreRecordingsFromServer(planRes) {
+  if (!planRes || !planRes.speechAttempts) return;
+  for (const [planItemId, attempt] of Object.entries(planRes.speechAttempts)) {
+    const existing = state.recordings[planItemId];
+    // 로컬에 더 최신 데이터(녹음 중이거나 blob 있음)가 있으면 덮어쓰지 않음
+    if (existing && (existing.blobUrl || existing.status === "recording")) continue;
+    state.recordings[planItemId] = {
+      status: "saved",
+      speechId: attempt.speechId,
+      score: attempt.score,
+      durationMs: attempt.durationMs,
+      blobUrl: null,
+      mediaRecorder: null,
+      chunks: [],
+      startedAt: 0,
+      recognition: null,
+      recognizedText: "",
+    };
   }
 }
 
@@ -316,12 +445,20 @@ async function requestSentenceCoach(item) {
         item_context: {
           lemma: item.lemma,
           meaning_ko: item.meaningKo,
+          example_en: item.exampleEn || "",
         },
       }),
     });
 
-    state.sentenceFeedbacks[item.planItemId] = coached.result || coached;
-    await patchItem(item.planItemId, { sentenceStatus: "done" });
+    const result = coached.result || coached;
+    state.sentenceFeedbacks[item.planItemId] = result;
+
+    // "good"일 때만 완료 처리, needs_fix/retry면 수정 가능
+    if (result.overall === "good") {
+      await patchItem(item.planItemId, { sentenceStatus: "done" });
+    } else {
+      renderToday();
+    }
   } catch (err) {
     showToast(t("errors.coach_fail"));
   }
@@ -339,6 +476,29 @@ async function startRecording(item) {
     const chunks = [];
     const startedAt = Date.now();
 
+    // Web Speech API로 음성인식 병행 (발음 점수 산출용)
+    let recognition = null;
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      recognition = new SpeechRecognition();
+      recognition.lang = "en-US";
+      recognition.continuous = true;
+      recognition.interimResults = false;
+      recognition.maxAlternatives = 1;
+      const transcripts = [];
+      recognition.onresult = (event) => {
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          if (event.results[i].isFinal) {
+            transcripts.push(event.results[i][0].transcript);
+          }
+        }
+        const rec = state.recordings[item.planItemId];
+        if (rec) rec.recognizedText = transcripts.join(" ");
+      };
+      recognition.onerror = () => {}; // 조용히 무시
+      try { recognition.start(); } catch { recognition = null; }
+    }
+
     state.recordings[item.planItemId] = {
       status: "recording",
       mediaRecorder,
@@ -348,6 +508,8 @@ async function startRecording(item) {
       durationMs: 0,
       speechId: null,
       score: null,
+      recognition,
+      recognizedText: "",
     };
 
     mediaRecorder.ondataavailable = (event) => {
@@ -381,6 +543,59 @@ function stopRecording(item) {
   const recording = state.recordings[item.planItemId];
   if (!recording || recording.status !== "recording") return;
   recording.mediaRecorder.stop();
+  if (recording.recognition) {
+    try { recording.recognition.stop(); } catch { /* already stopped */ }
+  }
+}
+
+/**
+ * 발음 점수 산출
+ * 1) SpeechRecognition이 있으면: 인식된 텍스트와 기대 문장의 단어 매칭률로 산출
+ * 2) SpeechRecognition이 없으면: 녹음 시간과 기대 문장 길이 비율로 근사 산출
+ */
+function calculatePronunciationScore(recognized, expected, durationMs, hasRecognition) {
+  const expectedWords = (expected || "")
+    .toLowerCase().replace(/[^\w\s]/g, "").split(/\s+/).filter((w) => w);
+
+  if (expectedWords.length === 0) {
+    // 비교 대상 문장이 없으면 보수적 점수
+    return Math.max(20, Math.min(60, Math.floor(30 + Math.random() * 20)));
+  }
+
+  if (hasRecognition) {
+    const recognizedWords = (recognized || "")
+      .toLowerCase().replace(/[^\w\s]/g, "").split(/\s+/).filter((w) => w);
+
+    if (recognizedWords.length === 0) {
+      // 영어가 전혀 인식되지 않음 — 엉뚱한 발화 가능성 높음
+      return Math.max(10, Math.min(30, Math.floor(15 + Math.random() * 10)));
+    }
+
+    // 단어 매칭률 계산
+    const recognizedSet = new Set(recognizedWords);
+    let matchCount = 0;
+    for (const w of expectedWords) {
+      if (recognizedSet.has(w)) matchCount++;
+    }
+    const matchRatio = matchCount / expectedWords.length;
+
+    // 20(기본) + matchRatio * 70(최대) + 작은 랜덤 편차
+    const base = 20 + Math.floor(matchRatio * 70);
+    const variance = Math.floor(Math.random() * 8 - 4);
+    return Math.max(10, Math.min(98, base + variance));
+  }
+
+  // SpeechRecognition 미지원 → 녹음 시간 기반 휴리스틱
+  const expectedDurationMs = expectedWords.length * 500; // 단어당 ~500ms
+  const ratio = durationMs / expectedDurationMs;
+
+  if (ratio < 0.2) return Math.floor(15 + Math.random() * 10);
+  if (ratio < 0.4) return Math.floor(30 + Math.random() * 10);
+  if (ratio > 4.0) return Math.floor(25 + Math.random() * 10);
+  if (ratio > 2.5) return Math.floor(35 + Math.random() * 15);
+
+  // 합리적 범위 (0.4~2.5)
+  return Math.floor(45 + Math.random() * 30);
 }
 
 async function saveRecording(item) {
@@ -401,7 +616,12 @@ async function saveRecording(item) {
     });
 
     const speechId = created.speech_id;
-    const score = Math.max(45, Math.min(98, Math.floor(60 + Math.random() * 35)));
+    const score = calculatePronunciationScore(
+      recording.recognizedText || "",
+      state.sentenceDrafts[item.planItemId] || item.exampleEn || "",
+      recording.durationMs,
+      !!recording.recognition,
+    );
     await api(`/api/v1/speech/${speechId}/score`, {
       method: "PATCH",
       body: JSON.stringify({
@@ -433,15 +653,25 @@ function renderToday() {
 
   const completedCount = plan.items.filter((i) => i.isCompleted).length;
   const total = plan.dailyTarget;
-  const percent = Math.floor((completedCount / total) * 100);
   const isCompleted = plan.status === "completed";
+
+  // 서브태스크(암기/문장/말하기) 기반 프로그레스 바 계산
+  const stepsTotal = plan.items.length * 3;
+  const stepsCompleted = plan.items.reduce((sum, item) => {
+    let c = 0;
+    if (item.recallStatus === "success") c += 1;
+    if (item.sentenceStatus === "done") c += 1;
+    if (item.speechStatus === "done" || item.speechStatus === "skipped") c += 1;
+    return sum + c;
+  }, 0);
+  const stepPercent = stepsTotal < 1 ? 0 : Math.floor((stepsCompleted / stepsTotal) * 100);
   const allItemsDone = plan.items.every((i) => i.isCompleted);
 
   let ctaLabel, summaryCopy;
   if (isCompleted) {
     ctaLabel = t("today.cta.completed");
     summaryCopy = t("today.summary.completed");
-  } else if (completedCount === 0) {
+  } else if (completedCount === 0 && stepsCompleted === 0) {
     ctaLabel = t("today.cta.start");
     summaryCopy = t("today.summary.start", { target: total });
   } else {
@@ -470,7 +700,7 @@ function renderToday() {
         <span class="progress-count">${completedCount}/${total}</span>
       </div>
       <div class="progress-bar-outer">
-        <div class="progress-bar-inner" style="width: ${isCompleted ? 100 : percent}%"></div>
+        <div class="progress-bar-inner" style="width: ${isCompleted ? 100 : stepPercent}%"></div>
       </div>
       <p class="progress-copy">${escapeHtml(summaryCopy)}</p>
     </div>
@@ -498,96 +728,102 @@ function renderToday() {
     const feedback = state.sentenceFeedbacks[item.planItemId];
     const learningItem = state.plan.items.find((i) => i.itemId === item.itemId) || item;
 
+    const isExpanded = state.expandedCards.has(item.planItemId);
+
     html += `
-      <div class="card" id="card-${item.planItemId}">
-        <div class="card-header">
-          <div>
+      <div class="card ${isExpanded ? "card-expanded" : ""}" id="card-${item.planItemId}">
+        <div class="card-header card-toggle" data-toggle-card="${item.planItemId}">
+          <div class="card-header-left">
             <span class="card-title">${escapeHtml(item.lemma)}</span>
             <span class="type-badge">${itemTypeLabel(item.itemType)}</span>
+            ${item.isCompleted ? `<span class="chip chip-success">${escapeHtml(t("common.complete"))}</span>` : ""}
           </div>
-          ${item.isCompleted ? `<span class="chip chip-success">${escapeHtml(t("common.complete"))}</span>` : ""}
+          <span class="card-chevron ${isExpanded ? "card-chevron-open" : ""}">▾</span>
         </div>
-        <div class="meta-text mb-8">${escapeHtml(item.meaningKo)}</div>
-
-        ${learningItem.exampleEn ? `
-        <div class="example-sentence">
-          <div class="example-en">${escapeHtml(learningItem.exampleEn || `I used ${item.lemma} in my sentence.`)}</div>
-          <div class="example-ko">${escapeHtml(learningItem.exampleKo || "")}</div>
-        </div>
-        ` : ""}
-
-        <div class="chips-row mt-8">
+        <div class="meta-text">${escapeHtml(item.meaningKo)}</div>
+        <div class="chips-row mt-8 mb-8">
           ${recallChip}
           ${sentenceChip}
           ${speechChip}
         </div>
 
-        <!-- Step 1: Recall -->
-        ${!item.isCompleted ? `
-        <div class="actions-row">
-          <button class="btn btn-primary btn-sm" data-item="${item.planItemId}" data-type="recall-success"
-            ${item.recallStatus === "success" ? "disabled" : ""}>
-            ${escapeHtml(t("today.recall.success"))}
-          </button>
-          <button class="btn btn-secondary btn-sm" data-item="${item.planItemId}" data-type="recall-fail"
-            ${item.recallStatus !== "pending" ? "disabled" : ""}>
-            ${escapeHtml(t("today.recall.fail"))}
-          </button>
-        </div>
-        ` : ""}
-
-        <!-- Step 2: Sentence -->
-        <div class="compose-area">
-          <label class="compose-label" for="sentence-${item.planItemId}">${escapeHtml(t("today.sentence.label", { lemma: item.lemma }))}</label>
-          <textarea
-            id="sentence-${item.planItemId}"
-            data-sentence-input="${item.planItemId}"
-            placeholder="${escapeHtml(t("today.sentence.placeholder", { lemma: item.lemma }))}"
-            ${item.sentenceStatus === "done" ? "disabled" : ""}
-          >${escapeHtml(state.sentenceDrafts[item.planItemId] ?? "")}</textarea>
-          ${item.sentenceStatus !== "done" ? `
-          <div class="actions-row">
-            <button class="btn btn-secondary btn-sm" data-item="${item.planItemId}" data-type="coach">${escapeHtml(t("today.sentence.coach_btn"))}</button>
+        <div class="card-body ${isExpanded ? "card-body-open" : ""}">
+          <div class="card-body-inner">
+          ${learningItem.exampleEn ? `
+          <div class="example-sentence">
+            <div class="example-en">${escapeHtml(learningItem.exampleEn || `I used ${item.lemma} in my sentence.`)}</div>
+            <div class="example-ko">${escapeHtml(learningItem.exampleKo || "")}</div>
           </div>
           ` : ""}
-          ${feedback ? renderCoachFeedback(feedback) : ""}
-        </div>
 
-        <!-- Step 3: Speech -->
-        <div class="record-area">
-          <div class="record-status">
-            ${recording?.status === "recording"
-              ? `<div class="record-dot"></div><span>${escapeHtml(t("today.speech.recording"))}</span>`
-              : recording?.status === "saved"
-                ? `<span class="meta-text">${escapeHtml(t("today.speech.recorded"))}</span>`
-                : `<span class="meta-text">${escapeHtml(t("today.speech.label"))}</span>`
-            }
-          </div>
-          ${item.speechStatus !== "done" ? `
+          <!-- Step 1: Recall -->
+          ${!item.isCompleted ? `
           <div class="actions-row">
-            ${!recording || recording.status === "idle" || !recording.status
-              ? `<button class="btn btn-secondary btn-sm" data-item="${item.planItemId}" data-type="record-start">${escapeHtml(t("today.speech.start"))}</button>`
-              : ""
-            }
-            ${recording?.status === "recording"
-              ? `<button class="btn btn-primary btn-sm" data-item="${item.planItemId}" data-type="record-stop">${escapeHtml(t("today.speech.stop"))}</button>`
-              : ""
-            }
-            ${recording?.status === "recorded"
-              ? `<button class="btn btn-primary btn-sm" data-item="${item.planItemId}" data-type="record-save">${escapeHtml(t("today.speech.save"))}</button>
-                 <button class="btn btn-secondary btn-sm" data-item="${item.planItemId}" data-type="record-start">${escapeHtml(t("today.speech.retry"))}</button>`
-              : ""
-            }
-            <button class="btn btn-tertiary btn-sm" data-item="${item.planItemId}" data-type="skip-speech">${escapeHtml(t("today.speech.skip"))}</button>
+            <button class="btn btn-primary btn-sm" data-item="${item.planItemId}" data-type="recall-success"
+              ${item.recallStatus === "success" ? "disabled" : ""}>
+              ${escapeHtml(t("today.recall.success"))}
+            </button>
+            <button class="btn btn-secondary btn-sm" data-item="${item.planItemId}" data-type="recall-fail"
+              ${item.recallStatus !== "pending" ? "disabled" : ""}>
+              ${escapeHtml(t("today.recall.fail"))}
+            </button>
           </div>
           ` : ""}
-          ${recording?.blobUrl ? `<audio controls src="${recording.blobUrl}"></audio>` : ""}
-          ${recording?.score
-            ? `<div class="score-badge ${recording.score >= 80 ? "score-high" : recording.score >= 60 ? "score-mid" : "score-low"}">
-                ${escapeHtml(t("today.speech.score", { score: recording.score }))}
-              </div>`
-            : ""
-          }
+
+          <!-- Step 2: Sentence -->
+          <div class="compose-area">
+            <label class="compose-label" for="sentence-${item.planItemId}">${escapeHtml(t("today.sentence.label", { lemma: item.lemma }))}</label>
+            <textarea
+              id="sentence-${item.planItemId}"
+              data-sentence-input="${item.planItemId}"
+              placeholder="${escapeHtml(t("today.sentence.placeholder", { lemma: item.lemma }))}"
+              ${item.sentenceStatus === "done" ? "disabled" : ""}
+            >${escapeHtml(state.sentenceDrafts[item.planItemId] ?? "")}</textarea>
+            ${item.sentenceStatus !== "done" ? `
+            <div class="actions-row">
+              <button class="btn btn-secondary btn-sm" data-item="${item.planItemId}" data-type="coach">${escapeHtml(t("today.sentence.coach_btn"))}</button>
+            </div>
+            ` : ""}
+            ${feedback ? renderCoachFeedback(feedback) : ""}
+          </div>
+
+          <!-- Step 3: Speech -->
+          <div class="record-area">
+            <div class="record-status">
+              ${recording?.status === "recording"
+                ? `<div class="record-dot"></div><span>${escapeHtml(t("today.speech.recording"))}</span>`
+                : recording?.status === "saved"
+                  ? `<span class="meta-text">${escapeHtml(t("today.speech.recorded"))}</span>`
+                  : `<span class="meta-text">${escapeHtml(t("today.speech.label"))}</span>`
+              }
+            </div>
+            ${item.speechStatus !== "done" ? `
+            <div class="actions-row">
+              ${!recording || recording.status === "idle" || !recording.status
+                ? `<button class="btn btn-secondary btn-sm" data-item="${item.planItemId}" data-type="record-start">${escapeHtml(t("today.speech.start"))}</button>`
+                : ""
+              }
+              ${recording?.status === "recording"
+                ? `<button class="btn btn-primary btn-sm" data-item="${item.planItemId}" data-type="record-stop">${escapeHtml(t("today.speech.stop"))}</button>`
+                : ""
+              }
+              ${recording?.status === "recorded"
+                ? `<button class="btn btn-primary btn-sm" data-item="${item.planItemId}" data-type="record-save">${escapeHtml(t("today.speech.save"))}</button>
+                   <button class="btn btn-secondary btn-sm" data-item="${item.planItemId}" data-type="record-start">${escapeHtml(t("today.speech.retry"))}</button>`
+                : ""
+              }
+              <button class="btn btn-tertiary btn-sm" data-item="${item.planItemId}" data-type="skip-speech">${escapeHtml(t("today.speech.skip"))}</button>
+            </div>
+            ` : ""}
+            ${recording?.blobUrl ? `<audio controls src="${recording.blobUrl}"></audio>` : ""}
+            ${recording?.score
+              ? `<div class="score-badge ${recording.score >= 80 ? "score-high" : recording.score >= 60 ? "score-mid" : "score-low"}">
+                  ${escapeHtml(t("today.speech.score", { score: recording.score }))}
+                </div>`
+              : ""
+            }
+          </div>
+          </div>
         </div>
       </div>
     `;
@@ -605,6 +841,31 @@ function renderToday() {
   }
 
   el.innerHTML = html;
+
+  // Bind card toggle events
+  el.querySelectorAll("[data-toggle-card]").forEach((header) => {
+    header.addEventListener("click", (e) => {
+      // Don't toggle when clicking on buttons/chips inside header
+      if (e.target.closest("button")) return;
+      const cardId = header.dataset.toggleCard;
+      const card = document.getElementById(`card-${cardId}`);
+      const body = card?.querySelector(".card-body");
+      const chevron = header.querySelector(".card-chevron");
+      if (!body) return;
+
+      if (state.expandedCards.has(cardId)) {
+        state.expandedCards.delete(cardId);
+        body.classList.remove("card-body-open");
+        chevron?.classList.remove("card-chevron-open");
+        card.classList.remove("card-expanded");
+      } else {
+        state.expandedCards.add(cardId);
+        body.classList.add("card-body-open");
+        chevron?.classList.add("card-chevron-open");
+        card.classList.add("card-expanded");
+      }
+    });
+  });
 
   // Bind events
   el.querySelectorAll("button[data-item]").forEach((button) => {
@@ -806,10 +1067,25 @@ function renderHistory() {
 
   const streak = data.streak;
   const days = data.days || [];
+  const hasActivity = days.some((d) => d.learning_done > 0 || d.review_done > 0);
 
   let html = "";
 
   html += `<div class="section-title">${escapeHtml(t("history.title"))}</div>`;
+
+  // If no meaningful activity yet, show empty state
+  if (!hasActivity) {
+    html += `
+      <div class="empty-state">
+        <div class="empty-icon">📝</div>
+        <p>${escapeHtml(t("history.empty.message"))}</p>
+        <button class="btn btn-primary" onclick="setTab('today')">${escapeHtml(t("common.go_today"))}</button>
+      </div>
+    `;
+
+    el.innerHTML = html;
+    return;
+  }
 
   // Streak summary
   html += `
@@ -937,15 +1213,25 @@ function renderHistory() {
 
 // ─── Settings Screen (docs/08) ───
 async function saveSettings(field, value) {
+  // Optimistic update: 즉시 state 반영 + UI 갱신
+  const previousValue = state.profile[field];
+  state.profile[field] = value;
+  renderSettings();
+
   try {
-    await api("/api/v1/users/me/profile", {
+    const updated = await api("/api/v1/users/me/profile", {
       method: "PATCH",
       body: JSON.stringify({ [field]: value }),
     });
-    state.profile = await api("/api/v1/users/me/profile");
+    // PATCH 응답으로 state 동기화 (GET 재요청 불필요)
+    if (updated && typeof updated === "object") {
+      state.profile = updated;
+    }
     showToast(t("settings.toast.saved"));
-    renderSettings();
   } catch (err) {
+    // 실패 시 롤백
+    state.profile[field] = previousValue;
+    renderSettings();
     showToast(t("settings.toast.save_fail"));
   }
 }
@@ -1102,6 +1388,15 @@ function renderSettings() {
       </div>
     </div>
 
+    <!-- 탈퇴하기 -->
+    <div class="settings-section">
+      <div class="setting-row">
+        <span class="setting-label">탈퇴하기</span>
+        <button class="btn btn-danger btn-sm" id="delete-account-btn">탈퇴</button>
+      </div>
+      <p class="caption mt-8" style="color: var(--state-error);">계정과 모든 학습 데이터가 영구 삭제됩니다.</p>
+    </div>
+
     <!-- App Info -->
     <div class="app-info">
       <p>${escapeHtml(t("settings.version"))}</p>
@@ -1131,13 +1426,35 @@ function renderSettings() {
     saveSettings("level", e.target.value);
   });
 
-  // Bind reminder toggle
-  document.getElementById("reminder-toggle").addEventListener("click", () => {
-    saveSettings("reminder_enabled", !reminderOn);
+  // Bind reminder toggle (알림 권한 + 푸시 구독 연동)
+  document.getElementById("reminder-toggle").addEventListener("click", async () => {
+    const newValue = !reminderOn;
+    const toggleBtn = document.getElementById("reminder-toggle");
+
+    // 즉시 토글 시각 반영
+    toggleBtn.classList.toggle("on", newValue);
+
+    if (newValue) {
+      // 켜기: 알림 권한 요청 → 푸시 구독 → 서버 저장
+      const subscribed = await subscribePushNotifications();
+      if (!subscribed) {
+        // 권한 거부 또는 실패 시 토글 롤백
+        toggleBtn.classList.toggle("on", !newValue);
+        return;
+      }
+    } else {
+      // 끄기: 푸시 구독 해제
+      await unsubscribePushNotifications();
+    }
+
+    saveSettings("reminder_enabled", newValue);
   });
 
   // Bind speech toggle
   document.getElementById("speech-toggle").addEventListener("click", () => {
+    const toggleBtn = document.getElementById("speech-toggle");
+    // 즉시 토글 시각 반영
+    toggleBtn.classList.toggle("on", !speechRequired);
     saveSettings("speech_required_for_completion", !speechRequired);
   });
 
@@ -1148,6 +1465,29 @@ function renderSettings() {
   document.getElementById("logout-btn").addEventListener("click", async () => {
     await signOut();
     showAuthScreen();
+  });
+
+  // Bind delete account
+  document.getElementById("delete-account-btn").addEventListener("click", async () => {
+    const confirmed = confirm("정말 탈퇴하시겠습니까?\n모든 학습 데이터가 영구 삭제되며 복구할 수 없습니다.");
+    if (!confirmed) return;
+
+    const secondConfirm = confirm("마지막 확인입니다.\n탈퇴하면 되돌릴 수 없습니다. 계속하시겠습니까?");
+    if (!secondConfirm) return;
+
+    const btn = document.getElementById("delete-account-btn");
+    btn.disabled = true;
+    btn.textContent = "처리 중...";
+
+    const result = await deleteAccount();
+    if (result.success) {
+      alert("탈퇴가 완료되었습니다. 이용해 주셔서 감사합니다.");
+      showAuthScreen();
+    } else {
+      alert("탈퇴 처리에 실패했습니다: " + (result.error || "알 수 없는 오류"));
+      btn.disabled = false;
+      btn.textContent = "탈퇴";
+    }
   });
 }
 
@@ -1269,6 +1609,152 @@ function renderAll() {
       renderSettings();
       break;
   }
+}
+
+// ─── Onboarding ───
+// SSOT: docs/09_SCREEN_SPEC_ONBOARDING.md
+
+const onboardingState = {
+  currentStep: 1,
+  level: "A2",
+  learningFocus: "travel",
+  dailyTarget: 3,
+};
+
+function showOnboardingScreen() {
+  document.getElementById("auth-screen").classList.add("hidden");
+  document.getElementById("main-app").classList.add("hidden");
+  document.getElementById("onboarding-screen").classList.remove("hidden");
+  onboardingState.currentStep = 1;
+  renderOnboardingStep(1);
+}
+
+function hideOnboardingScreen() {
+  document.getElementById("onboarding-screen").classList.add("hidden");
+}
+
+function renderOnboardingStep(step) {
+  onboardingState.currentStep = step;
+
+  // Hide all steps, show the current one
+  for (let i = 1; i <= 4; i++) {
+    const el = document.getElementById(`onboarding-step-${i}`);
+    if (el) el.classList.toggle("hidden", i !== step);
+  }
+
+  // Update progress dots
+  const progressEl = document.getElementById("onboarding-progress");
+  const totalSteps = 4;
+  let dotsHtml = "";
+  for (let i = 1; i <= totalSteps; i++) {
+    const cls =
+      i < step ? "onboarding-progress-dot done" :
+      i === step ? "onboarding-progress-dot active" :
+      "onboarding-progress-dot";
+    dotsHtml += `<div class="${cls}"></div>`;
+  }
+  progressEl.innerHTML = dotsHtml;
+}
+
+function bindOnboardingOptionCards(containerId, stateKey) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  container.querySelectorAll(".onboarding-option-card").forEach((card) => {
+    card.addEventListener("click", () => {
+      // Deselect all in this group
+      container.querySelectorAll(".onboarding-option-card").forEach((c) => c.classList.remove("selected"));
+      card.classList.add("selected");
+      onboardingState[stateKey] = card.dataset.value;
+    });
+  });
+}
+
+async function completeOnboarding() {
+  const btn = document.getElementById("onboarding-complete-btn");
+  btn.disabled = true;
+  btn.textContent = "준비 중...";
+
+  try {
+    await api("/api/v1/users/me/onboarding/complete", {
+      method: "POST",
+      body: JSON.stringify({
+        level: onboardingState.level,
+        learning_focus: onboardingState.learningFocus,
+        daily_target: Number(onboardingState.dailyTarget),
+      }),
+    });
+
+    hideOnboardingScreen();
+    showMainApp();
+    bindTabs();
+    renderHeader();
+    updateTabLabels();
+
+    // 홈에 로딩 표시
+    const homeEl = document.getElementById("home");
+    if (homeEl) {
+      homeEl.innerHTML = `
+        <div class="loading-state">
+          <div class="loading-spinner"></div>
+          <p>첫 학습을 준비하고 있어요...</p>
+        </div>
+      `;
+    }
+
+    await loadDashboardData();
+    renderAll();
+    showToast("환영해요! 첫 학습을 시작해볼까요?");
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = "첫 학습 시작하기";
+    showToast("설정 저장에 실패했어요. 다시 시도해주세요.");
+  }
+}
+
+function bindOnboardingUI() {
+  // Step 1 → Step 2
+  document.getElementById("onboarding-start-btn").addEventListener("click", () => {
+    renderOnboardingStep(2);
+  });
+
+  // Step 2: Level options
+  bindOnboardingOptionCards("level-options", "level");
+
+  // Step 2 → Step 3
+  document.getElementById("onboarding-next-2").addEventListener("click", () => {
+    renderOnboardingStep(3);
+  });
+
+  // Step 2 ← back
+  document.getElementById("onboarding-back-2").addEventListener("click", () => {
+    renderOnboardingStep(1);
+  });
+
+  // Step 3: Focus options
+  bindOnboardingOptionCards("focus-options", "learningFocus");
+
+  // Step 3 → Step 4
+  document.getElementById("onboarding-next-3").addEventListener("click", () => {
+    renderOnboardingStep(4);
+  });
+
+  // Step 3 ← back
+  document.getElementById("onboarding-back-3").addEventListener("click", () => {
+    renderOnboardingStep(2);
+  });
+
+  // Step 4: Target options
+  bindOnboardingOptionCards("target-options", "dailyTarget");
+
+  // Step 4 ← back
+  document.getElementById("onboarding-back-4").addEventListener("click", () => {
+    renderOnboardingStep(3);
+  });
+
+  // Step 4: Complete
+  document.getElementById("onboarding-complete-btn").addEventListener("click", () => {
+    completeOnboarding();
+  });
 }
 
 // ─── Auth / Main Screen 전환 ───
@@ -1432,6 +1918,7 @@ function bindAuthUI() {
     setAuthLoading("signup-submit-btn", true);
     const result = await signUpWithEmail(email, password);
     setAuthLoading("signup-submit-btn", false);
+    updateSignupButtonState();
 
     if (!result.success) {
       showAuthError("signup-error", result.error);
@@ -1471,15 +1958,41 @@ function bindAuthUI() {
   const termsCheckbox = document.getElementById("signup-terms");
   const privacyCheckbox = document.getElementById("signup-privacy");
 
+  // ─── 가입하기 버튼 활성화/비활성화 ───
+  const signupEmailInput = document.getElementById("signup-email");
+  const signupPasswordInput = document.getElementById("signup-password");
+  const signupPasswordConfirmInput = document.getElementById("signup-password-confirm");
+  const signupSubmitBtn = document.getElementById("signup-submit-btn");
+
+  function updateSignupButtonState() {
+    const email = signupEmailInput.value.trim();
+    const password = signupPasswordInput.value;
+    const passwordConfirm = signupPasswordConfirmInput.value;
+
+    const hasEmail = email.length > 0;
+    const hasValidPassword = validatePassword(password) === null;
+    const passwordsMatch = password.length > 0 && password === passwordConfirm;
+    const termsAgreed = termsCheckbox.checked && privacyCheckbox.checked;
+
+    signupSubmitBtn.disabled = !(hasEmail && hasValidPassword && passwordsMatch && termsAgreed);
+  }
+
+  // 입력 필드 이벤트 바인딩
+  signupEmailInput.addEventListener("input", updateSignupButtonState);
+  signupPasswordInput.addEventListener("input", updateSignupButtonState);
+  signupPasswordConfirmInput.addEventListener("input", updateSignupButtonState);
+
   agreeAllCheckbox.addEventListener("change", () => {
     const checked = agreeAllCheckbox.checked;
     termsCheckbox.checked = checked;
     privacyCheckbox.checked = checked;
+    updateSignupButtonState();
   });
 
-  // 개별 체크박스 변경 시 전체동의 상태 동기화
+  // 개별 체크박스 변경 시 전체동의 상태 동기화 + 버튼 상태 업데이트
   function syncAgreeAll() {
     agreeAllCheckbox.checked = termsCheckbox.checked && privacyCheckbox.checked;
+    updateSignupButtonState();
   }
   termsCheckbox.addEventListener("change", syncAgreeAll);
   privacyCheckbox.addEventListener("change", syncAgreeAll);
@@ -1563,6 +2076,7 @@ window.scrollToFirstReview = scrollToFirstReview;
 
 /**
  * 로그인 성공 후 앱 초기화
+ * 온보딩 미완료 시 온보딩 화면으로, 완료 시 메인 앱으로 분기
  */
 async function onSignedIn() {
   // 초기 상태 리셋
@@ -1570,6 +2084,20 @@ async function onSignedIn() {
   state.plan = null;
   state.reviews = [];
   state.activeTab = "home";
+
+  // 서버에 사용자 초기화 요청 (온보딩 완료 여부 확인)
+  let initResult = null;
+  try {
+    initResult = await initializeUser();
+  } catch {
+    // Non-blocking — 이미 초기화된 사용자일 수 있음
+  }
+
+  // 온보딩 미완료 → 온보딩 화면 표시
+  if (initResult && initResult.onboarding_completed === false) {
+    showOnboardingScreen();
+    return;
+  }
 
   showMainApp();
   bindTabs();
@@ -1587,13 +2115,6 @@ async function onSignedIn() {
     `;
   }
 
-  // 서버에 사용자 초기화 요청
-  try {
-    await initializeUser();
-  } catch {
-    // Non-blocking — 이미 초기화된 사용자일 수 있음
-  }
-
   // 빠른 데이터만 로드 (프로필 + 히스토리, AI 호출 없음)
   await loadDashboardData();
 
@@ -1609,6 +2130,9 @@ async function main() {
 
   // Auth UI 바인딩
   bindAuthUI();
+
+  // Onboarding UI 바인딩
+  bindOnboardingUI();
 
   // Auth 상태 리스너 등록
   onAuthStateChange(async (event, session) => {

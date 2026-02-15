@@ -10,14 +10,11 @@
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 
 // ─── Supabase 설정 ───
-// 환경 변수는 서버가 /auth-config 엔드포인트로 전달하거나,
-// 빌드 시 주입할 수 있지만, MVP에서는 인라인 설정을 사용한다.
+// 서버가 환경변수를 기반으로 /config.js를 동적 생성하여 제공한다.
+// 개발/프로덕션 환경에 따라 올바른 Supabase 프로젝트가 자동 선택된다.
 // SUPABASE_ANON_KEY는 공개 키이므로 클라이언트에 노출해도 안전하다.
 // RLS가 데이터 보안을 담당한다.
-
-const SUPABASE_URL = "https://eabegbtbirupyhtafldw.supabase.co";
-const SUPABASE_ANON_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVhYmVnYnRiaXJ1cHlodGFmbGR3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzExMzExMTgsImV4cCI6MjA4NjcwNzExOH0.YteKbNxdSbNmGTQBFcwPrX_2qtFx8XkAKt52al8x0dY";
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -140,6 +137,23 @@ export async function signInWithGoogle() {
 export async function signOut() {
   await supabase.auth.signOut();
   _currentSession = null;
+}
+
+// ─── 회원 탈퇴 ───
+
+/**
+ * 회원 탈퇴 — 서버에서 모든 데이터 + Auth 계정 삭제 후 로컬 세션 정리
+ * @returns { success: boolean, error?: string }
+ */
+export async function deleteAccount() {
+  try {
+    await authenticatedFetch("/api/v1/users/me", { method: "DELETE" });
+    _currentSession = null;
+    await supabase.auth.signOut();
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message || "탈퇴 처리에 실패했습니다." };
+  }
 }
 
 // ─── 비밀번호 재설정 ───

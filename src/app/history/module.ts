@@ -29,6 +29,8 @@ export function resolveHistoryScreenState(
 ): HistoryScreenState {
   if (hasError) return "error";
   if (days.length === 0) return "ready_empty";
+  const hasActivity = days.some((d) => d.learningDone > 0 || d.reviewDone > 0);
+  if (!hasActivity) return "ready_empty";
   return "ready_with_data";
 }
 

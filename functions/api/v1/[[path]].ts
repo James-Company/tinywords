@@ -139,6 +139,10 @@ export const onRequest: PagesFunction<Env> = async (context) => {
       const out = await server.users.resetData(authedCtx);
       return jsonResponse(mapStatus(out), out);
     }
+    if (method === "DELETE" && reqPath === "/api/v1/users/me") {
+      const out = await server.users.deleteAccount(authedCtx);
+      return jsonResponse(mapStatus(out), out);
+    }
 
     // ── DayPlan / Today ──
     if (method === "GET" && reqPath === "/api/v1/day-plans/today") {
@@ -200,7 +204,7 @@ export const onRequest: PagesFunction<Env> = async (context) => {
     }
 
     if (method === "POST" && reqPath === "/api/v1/ai/sentence-coach") {
-      const out = server.ai.sentenceCoach(authedCtx, body as never);
+      const out = await server.ai.sentenceCoach(authedCtx, body as never);
       return jsonResponse(mapStatus(out), out);
     }
 

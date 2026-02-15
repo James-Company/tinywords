@@ -7,7 +7,7 @@ import {
   type SentenceCoachInput,
   type WordGenerationInput,
 } from "../../../src/ai/prompts";
-import { generateWords, toLeajaItems } from "../ai-client";
+import { generateWords, toLeajaItems, coachSentence } from "../ai-client";
 import { getDb } from "../db";
 import type { RequestContext } from "../context";
 
@@ -84,19 +84,48 @@ export function registerAiRoutes() {
     });
   }
 
-  function sentenceCoach(
+  async function sentenceCoach(
     ctx: RequestContext,
     input: SentenceCoachInput,
-  ): ApiSuccess<unknown> | ApiError {
+  ): Promise<ApiSuccess<unknown> | ApiError> {
     const errors = validateSentenceCoachInput(input);
     if (errors.length > 0) {
       return fail(ctx.requestId, "VALIDATION_ERROR", errors.join(", "));
     }
 
+    // 1차: OpenAI 기반 코칭 시도
+    const aiResult = await coachSentence(input);
+    if (aiResult) {
+      return ok(ctx.requestId, {
+        result: aiResult,
+        meta: {
+          prompt_version: "tw-scoach-v1",
+          source: "ai",
+          generated_at: new Date().toISOString(),
+          safety: { contains_sensitive_content: false },
+        },
+      });
+    }
+
+    // 2차: AI 실패 시 휴리스틱 fallback
+    console.warn("[sentenceCoach] AI failed, using heuristic fallback");
+    const result = heuristicCoach(input);
+    return ok(ctx.requestId, {
+      result,
+      meta: {
+        prompt_version: "tw-scoach-v1",
+        source: "heuristic",
+        generated_at: new Date().toISOString(),
+        safety: { contains_sensitive_content: false },
+      },
+    });
+  }
+
+  /** 휴리스틱 fallback 코칭 (AI 실패 시 사용) */
+  function heuristicCoach(input: SentenceCoachInput) {
     const sentence = input.sentence_en.trim();
     const lemma = input.item_context.lemma;
 
-    // Simple coaching heuristic
     const usesLemma = sentence.toLowerCase().includes(lemma.toLowerCase());
     const hasArticle = /\b(a|an|the)\b/i.test(sentence);
     const wordCount = sentence.split(/\s+/).length;
@@ -152,11 +181,23 @@ export function registerAiRoutes() {
           : "핵심 단어를 넣어 한 문장만 다시 써볼까요?";
 
     const suggestions: string[] = [];
-    if (overall !== "good" && usesLemma) {
-      suggestions.push(`${sentence.replace(/\.$/, "")} (revised).`);
-    }
-    if (!usesLemma) {
-      suggestions.push(`I used ${lemma} in my daily routine.`);
+    if (overall !== "good") {
+      if (usesLemma) {
+        let corrected = sentence;
+        if (!endsWithPeriod) {
+          corrected = corrected.trimEnd() + ".";
+        }
+        if (corrected !== sentence) {
+          suggestions.push(corrected);
+        }
+      } else {
+        const example = input.item_context.example_en;
+        if (example && example.trim()) {
+          suggestions.push(example.trim());
+        } else {
+          suggestions.push(`I check my ${lemma} every day.`);
+        }
+      }
     }
 
     const nextActionKo =
@@ -164,21 +205,14 @@ export function registerAiRoutes() {
         ? "이제 첫 문장을 소리 내어 한 번 말해보세요."
         : "한 번 더 직접 고쳐서 말해보세요.";
 
-    return ok(ctx.requestId, {
-      result: {
-        overall,
-        score,
-        feedback_ko: feedbackKo,
-        highlights: highlights.slice(0, 2),
-        suggestions: suggestions.slice(0, 2),
-        next_action_ko: nextActionKo,
-      },
-      meta: {
-        prompt_version: "tw-scoach-v1",
-        generated_at: new Date().toISOString(),
-        safety: { contains_sensitive_content: false },
-      },
-    });
+    return {
+      overall,
+      score,
+      feedback_ko: feedbackKo,
+      highlights: highlights.slice(0, 2),
+      suggestions: suggestions.slice(0, 2),
+      next_action_ko: nextActionKo,
+    };
   }
 
   return { wordGeneration, sentenceCoach };

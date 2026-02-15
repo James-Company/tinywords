@@ -6,6 +6,7 @@ import { URL } from "node:url";
 import { fileURLToPath } from "node:url";
 import { createServer } from "./index";
 import { verifyAuth, isAuthError } from "./auth";
+import { startReminderScheduler } from "./routes/notifications";
 
 type JsonObject = Record<string, unknown>;
 
@@ -133,8 +134,22 @@ export function startHttpServer(port = 8080) {
         await sendStaticFile(res, webRoot, reqPath);
         return;
       }
-      if (method === "GET" && (reqPath === "/app.js" || reqPath === "/auth.js" || reqPath === "/styles.css" || reqPath === "/i18n.js")) {
+      if (method === "GET" && (reqPath === "/app.js" || reqPath === "/auth.js" || reqPath === "/styles.css" || reqPath === "/i18n.js" || reqPath === "/sw.js")) {
         await sendStaticFile(res, webRoot, reqPath);
+        return;
+      }
+
+      // Dynamic config.js — Supabase + VAPID 설정을 환경변수에서 주입
+      if (method === "GET" && reqPath === "/config.js") {
+        const supabaseUrl = process.env.SUPABASE_URL ?? "";
+        const supabaseAnonKey = process.env.SUPABASE_ANON_KEY ?? "";
+        const vapidPublicKey = process.env.VAPID_PUBLIC_KEY ?? "";
+        const js = `// Auto-generated from server environment\nexport const SUPABASE_URL = ${JSON.stringify(supabaseUrl)};\nexport const SUPABASE_ANON_KEY = ${JSON.stringify(supabaseAnonKey)};\nexport const VAPID_PUBLIC_KEY = ${JSON.stringify(vapidPublicKey)};\n`;
+        res.writeHead(200, {
+          "content-type": "text/javascript; charset=utf-8",
+          "cache-control": "no-cache",
+        });
+        res.end(js);
         return;
       }
 
@@ -173,6 +188,14 @@ export function startHttpServer(port = 8080) {
           return;
         }
 
+        // Onboarding complete
+        if (method === "POST" && reqPath === "/api/v1/users/me/onboarding/complete") {
+          const body = await readBody(req);
+          const out = await app.users.completeOnboarding(authedCtx, body as never);
+          sendJson(res, mapStatus(out), out);
+          return;
+        }
+
         // User profile
         if (method === "GET" && reqPath === "/api/v1/users/me/profile") {
           const out = await app.users.getProfile(authedCtx);
@@ -187,6 +210,11 @@ export function startHttpServer(port = 8080) {
         }
         if (method === "POST" && reqPath === "/api/v1/users/me/reset") {
           const out = await app.users.resetData(authedCtx);
+          sendJson(res, mapStatus(out), out);
+          return;
+        }
+        if (method === "DELETE" && reqPath === "/api/v1/users/me") {
+          const out = await app.users.deleteAccount(authedCtx);
           sendJson(res, mapStatus(out), out);
           return;
         }
@@ -251,7 +279,7 @@ export function startHttpServer(port = 8080) {
 
         if (method === "POST" && reqPath === "/api/v1/ai/sentence-coach") {
           const body = await readBody(req);
-          const out = app.ai.sentenceCoach(authedCtx, body as never);
+          const out = await app.ai.sentenceCoach(authedCtx, body as never);
           sendJson(res, mapStatus(out), out);
           return;
         }
@@ -272,6 +300,25 @@ export function startHttpServer(port = 8080) {
           return;
         }
 
+        // Notifications / Push
+        if (method === "GET" && reqPath === "/api/v1/notifications/vapid-public-key") {
+          const out = app.notifications.getVapidPublicKey(authedCtx);
+          sendJson(res, 200, out);
+          return;
+        }
+        if (method === "POST" && reqPath === "/api/v1/notifications/subscribe") {
+          const body = await readBody(req);
+          const out = await app.notifications.subscribe(authedCtx, body as never);
+          sendJson(res, mapStatus(out), out);
+          return;
+        }
+        if (method === "POST" && reqPath === "/api/v1/notifications/unsubscribe") {
+          const body = await readBody(req);
+          const out = await app.notifications.unsubscribe(authedCtx, body as never);
+          sendJson(res, mapStatus(out), out);
+          return;
+        }
+
         sendJson(res, 404, { error: { code: "NOT_FOUND", message: "route not found" } });
         return;
       }
@@ -283,6 +330,8 @@ export function startHttpServer(port = 8080) {
 
   server.listen(port, () => {
     process.stdout.write(`TinyWords API listening on http://localhost:${port}\n`);
+    // 리마인더 스케줄러 시작 (매일 09:00 KST)
+    startReminderScheduler();
   });
   return server;
 }

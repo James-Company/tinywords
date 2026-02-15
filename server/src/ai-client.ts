@@ -10,10 +10,15 @@ import OpenAI from "openai";
 import {
   buildWordGenSystemPrompt,
   buildWordGenUserPrompt,
+  buildSentenceCoachSystemPrompt,
+  buildSentenceCoachUserPrompt,
   validateWordGenOutput,
   type WordGenerationInput,
   type WordGenerationItem,
   type WordGenerationOutput,
+  type SentenceCoachInput,
+  type SentenceCoachOutput,
+  type SentenceCoachResult,
   PROMPT_VERSION,
 } from "../../src/ai/prompts";
 import { pickFallbackWords } from "./fallback-words";
@@ -164,4 +169,74 @@ export function toLeajaItems(items: WordGenerationItem[]): LearningItemData[] {
     source: "ai_generated" as const,
     isActive: true,
   }));
+}
+
+// ── Sentence Coach AI ─────────────────────────────────────────
+
+const SENTENCE_COACH_FALLBACK: SentenceCoachResult = {
+  overall: "needs_fix",
+  score: 60,
+  feedback_ko: "좋아요. 핵심 단어를 넣어 한 문장만 다시 써볼까요?",
+  highlights: [],
+  suggestions: [],
+  next_action_ko: "한 번 더 직접 고쳐서 말해보세요.",
+};
+
+/**
+ * OpenAI로 문장 코칭 — SSOT: docs/10_AI_SENTENCE_COACH_PROMPT.md
+ * 실패 시 null 반환 (호출자가 fallback 처리)
+ */
+export async function coachSentence(
+  input: SentenceCoachInput,
+): Promise<SentenceCoachResult | null> {
+  const client = getClient();
+  if (!client) {
+    console.warn("[ai-client] OpenAI not configured, skipping sentence coach AI");
+    return null;
+  }
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const response = await client.chat.completions.create({
+        model: "gpt-4o-mini",
+        temperature: 0.6,
+        max_tokens: 800,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: buildSentenceCoachSystemPrompt() },
+          { role: "user", content: buildSentenceCoachUserPrompt(input) },
+        ],
+      });
+
+      const content = response.choices[0]?.message?.content;
+      if (!content) {
+        throw new Error("Empty response from OpenAI");
+      }
+
+      const parsed = JSON.parse(content) as SentenceCoachOutput;
+      const result = parsed.result;
+
+      // 기본 검증
+      if (!result || !result.overall || typeof result.score !== "number") {
+        throw new Error("Invalid coaching response schema");
+      }
+
+      // score 범위 클램프
+      result.score = Math.max(0, Math.min(100, result.score));
+
+      // suggestions 최대 2개
+      if (result.suggestions?.length > 2) {
+        result.suggestions = result.suggestions.slice(0, 2);
+      }
+
+      return result;
+    } catch (err) {
+      console.warn(
+        `[ai-client] Sentence coach AI failed (attempt ${attempt + 1}/${MAX_RETRIES + 1}):`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  return null; // 모든 시도 실패
 }

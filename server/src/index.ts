@@ -7,6 +7,7 @@ import { registerAiRoutes } from "./routes/ai";
 import { registerSpeechRoutes } from "./routes/speech";
 import { registerUserRoutes } from "./routes/users";
 import { registerHistoryRoutes } from "./routes/history";
+import { registerNotificationRoutes } from "./routes/notifications";
 
 /**
  * 지정 타임존 기준 오늘 날짜(YYYY-MM-DD)를 반환한다.
@@ -42,6 +43,7 @@ export function createServer() {
   const ai = registerAiRoutes();
   const speech = registerSpeechRoutes();
   const history = registerHistoryRoutes();
+  const notifications = registerNotificationRoutes();
 
   function createContext(
     requestId: string,
@@ -63,6 +65,7 @@ export function createServer() {
     ai,
     speech,
     history,
+    notifications,
     createContext,
   };
 }
