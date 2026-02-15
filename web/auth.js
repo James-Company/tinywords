@@ -72,7 +72,13 @@ export async function signUpWithEmail(email, password) {
     return { success: false, error: error.message };
   }
 
-  // Supabase는 이메일 확인이 필요한 경우 user는 있지만 session은 null일 수 있다
+  // Supabase는 이메일 열거 방지를 위해 이미 가입된 이메일에도 에러를 반환하지 않는다.
+  // 대신 identities가 빈 배열이면 이미 존재하는 사용자이다.
+  if (data.user && data.user.identities && data.user.identities.length === 0) {
+    return { success: false, error: "이미 가입된 이메일입니다. 로그인해주세요." };
+  }
+
+  // 이메일 확인이 필요한 경우 user는 있지만 session은 null
   if (data.user && !data.session) {
     return { success: true, needsConfirmation: true };
   }
