@@ -2135,10 +2135,18 @@ async function main() {
   bindOnboardingUI();
 
   // Auth 상태 리스너 등록
+  // 이미 초기화된 상태에서 TOKEN_REFRESHED/SIGNED_IN 재발생 시
+  // onSignedIn() 중복 실행을 방지한다.
+  let appInitialized = false;
+
   onAuthStateChange(async (event, session) => {
     if (event === "SIGNED_IN" && session) {
-      await onSignedIn();
+      if (!appInitialized) {
+        appInitialized = true;
+        await onSignedIn();
+      }
     } else if (event === "SIGNED_OUT") {
+      appInitialized = false;
       showAuthScreen();
     }
   });
@@ -2146,6 +2154,7 @@ async function main() {
   // 기존 세션 확인
   const session = await getSession();
   if (session) {
+    appInitialized = true;
     await onSignedIn();
   } else {
     showAuthScreen();
