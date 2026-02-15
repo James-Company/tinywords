@@ -1,0 +1,60 @@
+# TinyWords Docs Index
+
+TinyWords의 SSOT 문서 모음 인덱스입니다.  
+기능 정의, 정책, 프롬프트, API, 테스트, 릴리즈 기준은 아래 문서를 단일 기준으로 사용합니다.
+
+---
+
+## Core
+
+- [SSOT 원칙](./SSOT.md)
+- [00_INDEX](./00_INDEX.md)
+- [01_PRODUCT_VISION](./01_PRODUCT_VISION.md)
+- [02_MVP_SCOPE](./02_MVP_SCOPE.md)
+- [03_USER_FLOWS](./03_USER_FLOWS.md)
+- [04_DATA_MODEL](./04_DATA_MODEL.md)
+
+## Screen Specs
+
+- [05_SCREEN_SPEC_TODAY](./05_SCREEN_SPEC_TODAY.md)
+- [06_SCREEN_SPEC_INBOX](./06_SCREEN_SPEC_INBOX.md)
+- [07_SCREEN_SPEC_HISTORY](./07_SCREEN_SPEC_HISTORY.md)
+- [08_SCREEN_SPEC_SETTINGS](./08_SCREEN_SPEC_SETTINGS.md)
+
+## AI / Learning Policy
+
+- [09_AI_WORD_GENERATION_PROMPT](./09_AI_WORD_GENERATION_PROMPT.md)
+- [10_AI_SENTENCE_COACH_PROMPT](./10_AI_SENTENCE_COACH_PROMPT.md)
+- [11_SPACED_REVIEW_POLICY](./11_SPACED_REVIEW_POLICY.md)
+- [12_STREAK_RULES](./12_STREAK_RULES.md)
+
+## Speech / API / Security
+
+- [13_AUDIO_RECORDING_SPEC](./13_AUDIO_RECORDING_SPEC.md)
+- [14_PRONUNCIATION_SCORING_SPEC](./14_PRONUNCIATION_SCORING_SPEC.md)
+- [15_API_CONTRACT](./15_API_CONTRACT.md)
+- [16_SECURITY_PRIVACY_KEYS](./16_SECURITY_PRIVACY_KEYS.md)
+
+## UI / Release
+
+- [17_UI_STYLE_NOTEBOOK_THEME](./17_UI_STYLE_NOTEBOOK_THEME.md)
+- [18_PLATFORM_PACKAGING](./18_PLATFORM_PACKAGING.md)
+- [19_TEST_PLAN](./19_TEST_PLAN.md)
+- [20_RELEASE_CHECKLIST](./20_RELEASE_CHECKLIST.md)
+
+## Auth
+
+- [22_AUTH_SPEC](./22_AUTH_SPEC.md)
+
+## Globalization
+
+- [21_I18N_LOCALIZATION](./21_I18N_LOCALIZATION.md)
+
+---
+
+## 문서 작성 가이드(간단)
+
+- 각 문서는 제목, 목적, 범위, 결정사항(규칙), 예외, 오픈 이슈 순서로 작성합니다.
+- 충돌 발생 시 `SSOT.md` 우선순위 규칙을 따릅니다.
+- 정책 변경은 문서 업데이트 후 구현/테스트에 반영합니다.
+- 경로/파일명 대소문자는 실제 파일명 기준으로 고정합니다(예: `SSOT.md`).

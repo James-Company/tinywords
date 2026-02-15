@@ -1,0 +1,293 @@
+import { createServer as createHttpServer } from "node:http";
+import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import nodePath from "node:path";
+import { URL } from "node:url";
+import { fileURLToPath } from "node:url";
+import { createServer } from "./index";
+import { verifyAuth, isAuthError } from "./auth";
+
+type JsonObject = Record<string, unknown>;
+
+function readBody(req: import("node:http").IncomingMessage): Promise<JsonObject> {
+  return new Promise((resolve, reject) => {
+    let data = "";
+    req.on("data", (chunk) => {
+      data += chunk;
+    });
+    req.on("end", () => {
+      if (!data) {
+        resolve({});
+        return;
+      }
+      try {
+        resolve(JSON.parse(data) as JsonObject);
+      } catch (error) {
+        reject(error);
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
+function sendJson(res: import("node:http").ServerResponse, statusCode: number, payload: unknown) {
+  res.writeHead(statusCode, {
+    "content-type": "application/json; charset=utf-8",
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS",
+    "access-control-allow-headers": "Content-Type, Authorization, X-Request-Id, X-App-Version, X-Client-Timezone",
+  });
+  res.end(JSON.stringify(payload));
+}
+
+async function sendStaticFile(
+  res: import("node:http").ServerResponse,
+  rootDir: string,
+  requestPath: string,
+) {
+  const normalized = requestPath === "/" ? "/index.html" : requestPath;
+  const filePath = nodePath.join(rootDir, normalized);
+  const ext = nodePath.extname(filePath);
+  const mimeType =
+    ext === ".html"
+      ? "text/html; charset=utf-8"
+      : ext === ".css"
+        ? "text/css; charset=utf-8"
+        : ext === ".js"
+          ? "text/javascript; charset=utf-8"
+          : ext === ".json"
+            ? "application/json; charset=utf-8"
+            : ext === ".svg"
+              ? "image/svg+xml"
+              : "application/octet-stream";
+
+  try {
+    const content = await readFile(filePath);
+    res.writeHead(200, { "content-type": mimeType });
+    res.end(content);
+  } catch {
+    res.writeHead(404, { "content-type": "text/plain" });
+    res.end("not found");
+  }
+}
+
+function mapStatus(payload: unknown): number {
+  if (!payload || typeof payload !== "object" || !("error" in payload)) return 200;
+  const code = (payload as { error: { code?: string } }).error.code;
+  switch (code) {
+    case "VALIDATION_ERROR":
+      return 400;
+    case "UNAUTHORIZED":
+      return 401;
+    case "FORBIDDEN":
+      return 403;
+    case "NOT_FOUND":
+      return 404;
+    case "CONFLICT":
+      return 409;
+    case "RATE_LIMITED":
+      return 429;
+    case "AI_UPSTREAM_ERROR":
+      return 502;
+    default:
+      return 500;
+  }
+}
+
+export function startHttpServer(port = 8080) {
+  const app = createServer();
+  const currentFile = fileURLToPath(import.meta.url);
+  const webRoot = nodePath.resolve(nodePath.dirname(currentFile), "../../web");
+  const server = createHttpServer(async (req, res) => {
+    try {
+      if (!req.url || !req.method) {
+        sendJson(res, 400, { error: "invalid request" });
+        return;
+      }
+
+      // Handle CORS preflight
+      if (req.method === "OPTIONS") {
+        sendJson(res, 204, null);
+        return;
+      }
+
+      const requestId = req.headers["x-request-id"]?.toString() || randomUUID();
+      const clientTimezone = req.headers["x-client-timezone"]?.toString() || undefined;
+      const ctx = app.createContext(requestId, undefined, clientTimezone);
+      const url = new URL(req.url, "http://localhost");
+      const reqPath = url.pathname;
+      const method = req.method.toUpperCase();
+
+      // Health check
+      if (method === "GET" && reqPath === "/health") {
+        sendJson(res, 200, app.health());
+        return;
+      }
+
+      // Static file serving
+      if (method === "GET" && (reqPath === "/" || reqPath === "/index.html")) {
+        await sendStaticFile(res, webRoot, "/index.html");
+        return;
+      }
+      if (method === "GET" && (reqPath === "/app.js" || reqPath === "/auth.js" || reqPath === "/styles.css" || reqPath === "/i18n.js")) {
+        await sendStaticFile(res, webRoot, reqPath);
+        return;
+      }
+
+      // i18n locale JSON files: /i18n/ko-KR.json, /i18n/en-US.json
+      const i18nMatch = reqPath.match(/^\/i18n\/([a-z]{2}-[A-Z]{2})\.json$/);
+      if (method === "GET" && i18nMatch) {
+        const localeRoot = nodePath.resolve(nodePath.dirname(currentFile), "../../src/i18n/locales");
+        await sendStaticFile(res, localeRoot, `/${i18nMatch[1]}.json`);
+        return;
+      }
+
+      // === API Routes (인증 필수) ===
+
+      // 인증 검증: /api/v1/* 엔드포인트는 모두 Bearer 토큰 필요
+      // SSOT: docs/22_AUTH_SPEC.md §7.2
+      if (reqPath.startsWith("/api/v1/")) {
+        const authResult = await verifyAuth(req.headers.authorization);
+        if (isAuthError(authResult)) {
+          sendJson(res, 401, {
+            error: { code: authResult.code, message: authResult.message },
+            meta: { request_id: requestId, timestamp: new Date().toISOString() },
+          });
+          return;
+        }
+
+        // RequestContext에 userId 주입
+        const authedCtx = {
+          ...ctx,
+          userId: authResult.userId,
+          userEmail: authResult.userEmail,
+        };
+
+        // Auth initialize — 첫 로그인 시 프로필 생성/확인
+        if (method === "POST" && reqPath === "/api/v1/auth/initialize") {
+          const body = await readBody(req);
+          const out = app.users.initializeUser(authedCtx, {
+            timezone: (body.timezone as string) || undefined,
+          });
+          sendJson(res, mapStatus(out), out);
+          return;
+        }
+
+        // User profile
+        if (method === "GET" && reqPath === "/api/v1/users/me/profile") {
+          const out = app.users.getProfile(authedCtx);
+          sendJson(res, mapStatus(out), out);
+          return;
+        }
+        if (method === "PATCH" && reqPath === "/api/v1/users/me/profile") {
+          const body = await readBody(req);
+          const out = app.users.patchProfile(authedCtx, body);
+          sendJson(res, mapStatus(out), out);
+          return;
+        }
+        if (method === "POST" && reqPath === "/api/v1/users/me/reset") {
+          const out = app.users.resetData(authedCtx);
+          sendJson(res, mapStatus(out), out);
+          return;
+        }
+
+        // DayPlan / Today
+        if (method === "GET" && reqPath === "/api/v1/day-plans/today") {
+          const createIfMissing = url.searchParams.get("create_if_missing") === "true";
+          const out = await app.dayPlans.getTodayDayPlan(authedCtx, createIfMissing);
+          sendJson(res, mapStatus(out), out);
+          return;
+        }
+
+        const planItemMatch = reqPath.match(/^\/api\/v1\/day-plans\/([^/]+)\/items\/([^/]+)$/);
+        if (method === "PATCH" && planItemMatch) {
+          const body = await readBody(req);
+          const out = app.dayPlans.patchPlanItem(authedCtx, planItemMatch[1], planItemMatch[2], body);
+          sendJson(res, mapStatus(out), out);
+          return;
+        }
+
+        const planCompleteMatch = reqPath.match(/^\/api\/v1\/day-plans\/([^/]+)\/complete$/);
+        if (method === "POST" && planCompleteMatch) {
+          const out = app.dayPlans.completePlan(authedCtx, planCompleteMatch[1]);
+          sendJson(res, mapStatus(out), out);
+          return;
+        }
+
+        // Reviews / Inbox
+        if (method === "GET" && reqPath === "/api/v1/reviews/queue") {
+          const out = app.reviews.getQueue(authedCtx);
+          sendJson(res, mapStatus(out), out);
+          return;
+        }
+
+        const reviewSubmitMatch = reqPath.match(/^\/api\/v1\/reviews\/([^/]+)\/submit$/);
+        if (method === "POST" && reviewSubmitMatch) {
+          const body = await readBody(req);
+          const out = app.reviews.submit(
+            authedCtx,
+            reviewSubmitMatch[1],
+            (body.result as "success" | "hard" | "fail") ?? "fail",
+          );
+          sendJson(res, mapStatus(out), out);
+          return;
+        }
+
+        // History
+        if (method === "GET" && reqPath === "/api/v1/history") {
+          const type = url.searchParams.get("type") || "all";
+          const out = app.history.getHistory(authedCtx, type);
+          sendJson(res, mapStatus(out), out);
+          return;
+        }
+
+        // AI endpoints
+        if (method === "POST" && reqPath === "/api/v1/ai/word-generation") {
+          const body = await readBody(req);
+          const out = await app.ai.wordGeneration(authedCtx, body as never);
+          sendJson(res, mapStatus(out), out);
+          return;
+        }
+
+        if (method === "POST" && reqPath === "/api/v1/ai/sentence-coach") {
+          const body = await readBody(req);
+          const out = app.ai.sentenceCoach(authedCtx, body as never);
+          sendJson(res, mapStatus(out), out);
+          return;
+        }
+
+        // Speech
+        if (method === "POST" && reqPath === "/api/v1/speech-attempts") {
+          const body = await readBody(req);
+          const out = app.speech.createAttempt(authedCtx, body as never);
+          sendJson(res, mapStatus(out), out);
+          return;
+        }
+
+        const speechScoreMatch = reqPath.match(/^\/api\/v1\/speech\/([^/]+)\/score$/);
+        if (method === "PATCH" && speechScoreMatch) {
+          const body = await readBody(req);
+          const out = app.speech.updateScore(authedCtx, speechScoreMatch[1], body as never);
+          sendJson(res, mapStatus(out), out);
+          return;
+        }
+
+        sendJson(res, 404, { error: { code: "NOT_FOUND", message: "route not found" } });
+        return;
+      }
+
+    } catch {
+      sendJson(res, 500, { error: { code: "INTERNAL_ERROR", message: "unexpected error" } });
+    }
+  });
+
+  server.listen(port, () => {
+    process.stdout.write(`TinyWords API listening on http://localhost:${port}\n`);
+  });
+  return server;
+}
+
+if (process.argv[1]?.endsWith("/server/src/http.ts")) {
+  const port = Number(process.env.PORT ?? 8080);
+  startHttpServer(port);
+}

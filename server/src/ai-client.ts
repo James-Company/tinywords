@@ -1,0 +1,162 @@
+/**
+ * OpenAI 기반 단어 생성 클라이언트
+ * SSOT: docs/09_AI_WORD_GENERATION_PROMPT.md
+ *
+ * - 실제 OpenAI API를 호출하여 학습 단어를 생성
+ * - 응답 검증 실패 시 1회 재시도
+ * - 최종 실패 시 fallback pool 사용
+ */
+import OpenAI from "openai";
+import {
+  buildWordGenSystemPrompt,
+  buildWordGenUserPrompt,
+  validateWordGenOutput,
+  type WordGenerationInput,
+  type WordGenerationItem,
+  type WordGenerationOutput,
+  PROMPT_VERSION,
+} from "../../src/ai/prompts";
+import { getWordPool, type LearningItem } from "./store";
+
+const MAX_RETRIES = 1;
+
+let openaiClient: OpenAI | null = null;
+
+function getClient(): OpenAI | null {
+  if (openaiClient) return openaiClient;
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey || apiKey.startsWith("sk-your-")) {
+    return null;
+  }
+  openaiClient = new OpenAI({ apiKey });
+  return openaiClient;
+}
+
+/**
+ * OpenAI Chat Completion 호출 → WordGenerationOutput 파싱
+ */
+async function callOpenAI(input: WordGenerationInput): Promise<WordGenerationOutput> {
+  const client = getClient();
+  if (!client) {
+    throw new Error("OPENAI_API_KEY is not configured");
+  }
+
+  const response = await client.chat.completions.create({
+    model: "gpt-4o",
+    temperature: 0.8,
+    max_tokens: 1500,
+    response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: buildWordGenSystemPrompt() },
+      { role: "user", content: buildWordGenUserPrompt(input) },
+    ],
+  });
+
+  const content = response.choices[0]?.message?.content;
+  if (!content) {
+    throw new Error("Empty response from OpenAI");
+  }
+
+  return JSON.parse(content) as WordGenerationOutput;
+}
+
+/**
+ * 폴백: WORD_POOL에서 랜덤 선택 (AI 실패 시)
+ */
+function fallbackFromPool(
+  dailyTarget: number,
+  avoidWords: string[],
+): WordGenerationItem[] {
+  const avoidSet = new Set(avoidWords.map((w) => w.toLowerCase()));
+  const pool = getWordPool();
+  const available = pool.filter((w) => w.isActive && !avoidSet.has(w.lemma.toLowerCase()));
+  const shuffled = [...available].sort(() => Math.random() - 0.5);
+  const selected = shuffled.slice(0, dailyTarget);
+
+  return selected.map((w) => ({
+    item_type: w.itemType,
+    lemma: w.lemma,
+    meaning_ko: w.meaningKo,
+    part_of_speech: w.partOfSpeech,
+    example_en: w.exampleEn,
+    example_ko: w.exampleKo,
+    difficulty: "A2",
+    tags: ["general"],
+  }));
+}
+
+export interface GenerateWordsResult {
+  items: WordGenerationItem[];
+  source: "ai" | "fallback";
+  meta: WordGenerationOutput["meta"];
+}
+
+/**
+ * 단어 생성 메인 함수
+ *
+ * 1. OpenAI 호출 → 검증
+ * 2. 검증 실패 시 1회 재시도
+ * 3. 최종 실패 시 fallback pool
+ */
+export async function generateWords(input: WordGenerationInput): Promise<GenerateWordsResult> {
+  const avoidWords = input.avoid_words ?? [];
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const output = await callOpenAI(input);
+      const errors = validateWordGenOutput(output, input.daily_target, avoidWords);
+
+      if (errors.length === 0) {
+        return {
+          items: output.items,
+          source: "ai",
+          meta: output.meta,
+        };
+      }
+
+      console.warn(
+        `[ai-client] Validation failed (attempt ${attempt + 1}/${MAX_RETRIES + 1}):`,
+        errors,
+      );
+    } catch (err) {
+      console.warn(
+        `[ai-client] OpenAI call failed (attempt ${attempt + 1}/${MAX_RETRIES + 1}):`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  // Fallback
+  console.warn("[ai-client] All attempts failed, using fallback word pool");
+  const fallbackItems = fallbackFromPool(input.daily_target, avoidWords);
+
+  return {
+    items: fallbackItems,
+    source: "fallback",
+    meta: {
+      prompt_version: PROMPT_VERSION,
+      generated_at: new Date().toISOString(),
+      safety: { contains_sensitive_content: false },
+      error_code: "AI_FALLBACK",
+      reason: "AI generation failed, using local word pool",
+    },
+  };
+}
+
+/**
+ * AI 생성 결과를 LearningItem 형태로 변환
+ */
+export function toLeajaItems(items: WordGenerationItem[]): LearningItem[] {
+  return items.map((item, i) => ({
+    itemId: `ai-${Date.now()}-${i}`,
+    itemType: item.item_type,
+    lemma: item.lemma,
+    meaningKo: item.meaning_ko,
+    partOfSpeech: item.part_of_speech,
+    exampleEn: item.example_en,
+    exampleKo: item.example_ko,
+    source: "ai_generated" as const,
+    isActive: true,
+    createdAt: new Date().toISOString(),
+  }));
+}
