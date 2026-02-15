@@ -1209,8 +1209,10 @@ function renderHistory() {
       </div>
     `;
   } else {
+    const todayDate = getLocalToday();
     days.forEach((day) => {
       const isCompleted = day.dayplan_status === "completed";
+      const isToday = day.plan_date === todayDate;
       const isExpanded = state.expandedDays.has(day.plan_date);
       const statusLabel = isCompleted
         ? t("history.day.completed")
@@ -1254,7 +1256,7 @@ function renderHistory() {
           `;
         });
 
-        if (!isCompleted) {
+        if (isToday && !isCompleted) {
           html += `
             <div class="actions-row mt-8">
               <button class="btn btn-secondary btn-sm" onclick="setTab('today')">${escapeHtml(t("common.go_today"))}</button>
