@@ -1375,9 +1375,18 @@ async function resetAllData() {
               onClick: async () => {
                 try {
                   await api("/api/v1/users/me/reset", { method: "POST" });
-                  showToast(t("settings.toast.reset_done"));
-                  await loadData();
+                  // 인메모리 상태 초기화
+                  state.plan = null;
+                  state.reviews = null;
+                  state.history = null;
+                  state.sentenceDrafts = {};
+                  state.sentenceFeedbacks = {};
+                  state.recordings = {};
+                  state.expandedCards = new Set();
+                  todayLoaded = false;
+                  await loadDashboardData();
                   renderAll();
+                  showToast(t("settings.toast.reset_done"));
                 } catch {
                   showToast(t("settings.toast.reset_fail"));
                 }
