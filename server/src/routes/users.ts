@@ -131,6 +131,12 @@ export function registerUserRoutes() {
       })
       .eq("user_id", ctx.userId);
 
+    // 프로필 created_at 초기화 (함께한 시간 리셋)
+    await db
+      .from("user_profiles")
+      .update({ created_at: ctx.nowIso, updated_at: ctx.nowIso })
+      .eq("user_id", ctx.userId);
+
     return ok(ctx.requestId, { reset: true });
   }
 
