@@ -72,11 +72,11 @@ export function registerDayPlanRoutes() {
 
       const plan = toDayPlan(planRow, items ?? []);
       const itemIds = (items ?? []).map((r: Record<string, unknown>) => r.id as string);
-      const [speechAttempts, savedSentences] = await Promise.all([
+      const [speechAttempts, sentenceData] = await Promise.all([
         fetchSpeechAttempts(itemIds),
         fetchSentenceAttempts(itemIds),
       ]);
-      return ok(ctx.requestId, { ...plan, speechAttempts, savedSentences });
+      return ok(ctx.requestId, { ...plan, speechAttempts, savedSentences: sentenceData.sentences, savedFeedbacks: sentenceData.feedbacks });
     }
 
     if (!createIfMissing) {
@@ -195,11 +195,11 @@ export function registerDayPlanRoutes() {
 
         const plan = toDayPlan(existingPlan, existingItems ?? []);
         const itemIds = (existingItems ?? []).map((r: Record<string, unknown>) => r.id as string);
-        const [speechAttempts, savedSentences] = await Promise.all([
+        const [speechAttempts, sentenceData] = await Promise.all([
           fetchSpeechAttempts(itemIds),
           fetchSentenceAttempts(itemIds),
         ]);
-        return ok(ctx.requestId, { ...plan, speechAttempts, savedSentences });
+        return ok(ctx.requestId, { ...plan, speechAttempts, savedSentences: sentenceData.sentences, savedFeedbacks: sentenceData.feedbacks });
       }
 
       return fail(ctx.requestId, "INTERNAL_ERROR", "failed to create day plan");
@@ -238,7 +238,7 @@ export function registerDayPlanRoutes() {
       occurred_at: ctx.nowIso,
     });
 
-    return ok(ctx.requestId, { ...toDayPlan(newPlan, insertedItems ?? []), speechAttempts: {}, savedSentences: {} });
+    return ok(ctx.requestId, { ...toDayPlan(newPlan, insertedItems ?? []), speechAttempts: {}, savedSentences: {}, savedFeedbacks: {} });
   }
 
   async function patchPlanItem(
@@ -250,6 +250,7 @@ export function registerDayPlanRoutes() {
       sentenceStatus?: "pending" | "done" | "skipped";
       speechStatus?: "pending" | "done" | "skipped";
       userSentence?: string;
+      coachFeedback?: Record<string, unknown>;
     },
   ): Promise<ApiSuccess<unknown> | ApiError> {
     const db = getDb();
@@ -303,6 +304,7 @@ export function registerDayPlanRoutes() {
         user_id: ctx.userId,
         plan_item_id: planItemId,
         sentence_en: input.userSentence,
+        coach_feedback: input.coachFeedback ? JSON.stringify(input.coachFeedback) : null,
       });
     }
 
@@ -508,24 +510,30 @@ async function fetchSpeechAttempts(
 
 async function fetchSentenceAttempts(
   itemIds: string[],
-): Promise<Record<string, string>> {
-  if (itemIds.length === 0) return {};
+): Promise<{ sentences: Record<string, string>; feedbacks: Record<string, unknown> }> {
+  if (itemIds.length === 0) return { sentences: {}, feedbacks: {} };
 
   const db = getDb();
   const { data: attempts } = await db
     .from("sentence_attempts")
-    .select("plan_item_id, sentence_en")
+    .select("plan_item_id, sentence_en, coach_feedback")
     .in("plan_item_id", itemIds)
     .order("created_at", { ascending: false });
 
-  const result: Record<string, string> = {};
+  const sentences: Record<string, string> = {};
+  const feedbacks: Record<string, unknown> = {};
   for (const sa of (attempts ?? [])) {
     const planItemId = sa.plan_item_id as string;
-    if (!result[planItemId]) {
-      result[planItemId] = sa.sentence_en as string;
+    if (!sentences[planItemId]) {
+      sentences[planItemId] = sa.sentence_en as string;
+      if (sa.coach_feedback) {
+        try {
+          feedbacks[planItemId] = JSON.parse(sa.coach_feedback as string);
+        } catch { /* ignore parse errors */ }
+      }
     }
   }
-  return result;
+  return { sentences, feedbacks };
 }
 
 // ── 학습 이력 수집 헬퍼 ─────────────────────────────────────

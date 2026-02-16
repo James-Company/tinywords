@@ -346,6 +346,7 @@ async function loadTodayData() {
     state.plan = planRes;
     await restoreRecordingsFromServer(planRes);
     restoreSentencesFromServer(planRes);
+    restoreFeedbacksFromServer(planRes);
     state.reviews = queueRes.tasks || [];
     todayLoaded = true;
     renderToday();
@@ -360,6 +361,7 @@ async function refreshToday() {
     state.plan = planRes;
     await restoreRecordingsFromServer(planRes);
     restoreSentencesFromServer(planRes);
+    restoreFeedbacksFromServer(planRes);
     renderToday();
   } catch (err) {
     showError(t("errors.network"));
@@ -445,6 +447,16 @@ function restoreSentencesFromServer(planRes) {
   }
 }
 
+// ─── Sentence Feedbacks 복원 ───
+/** 서버에서 받은 savedFeedbacks 데이터를 state.sentenceFeedbacks에 복원한다 */
+function restoreFeedbacksFromServer(planRes) {
+  if (!planRes || !planRes.savedFeedbacks) return;
+  for (const [planItemId, feedback] of Object.entries(planRes.savedFeedbacks)) {
+    if (state.sentenceFeedbacks[planItemId]) continue;
+    state.sentenceFeedbacks[planItemId] = feedback;
+  }
+}
+
 // ─── Streak Mini ───
 function renderStreakMini() {
   const el = document.getElementById("streak-mini");
@@ -505,7 +517,7 @@ async function requestSentenceCoach(item) {
 
     // "good"일 때만 완료 처리, needs_fix/retry면 수정 가능
     if (result.overall === "good") {
-      await patchItem(item.planItemId, { sentenceStatus: "done", userSentence: sentence });
+      await patchItem(item.planItemId, { sentenceStatus: "done", userSentence: sentence, coachFeedback: result });
     } else {
       renderToday();
     }
