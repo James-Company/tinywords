@@ -448,11 +448,12 @@ function restoreSentencesFromServer(planRes) {
 // ─── Streak Mini ───
 function renderStreakMini() {
   const el = document.getElementById("streak-mini");
-  if (!state.history) {
+  if (!el) return;
+  const streak = state.history?.streak;
+  if (!streak) {
     el.textContent = "";
     return;
   }
-  const streak = state.history.streak;
   if (streak.current_streak_days > 0) {
     el.textContent = t("streak.mini.active", { days: streak.current_streak_days });
   } else {
@@ -1783,27 +1784,41 @@ function renderHome() {
 }
 
 function renderAll() {
-  renderHeader();
-  updateTabLabels();
-  renderStreakMini();
+  try { renderHeader(); } catch (e) { console.error("renderHeader:", e); }
+  try { updateTabLabels(); } catch (e) { console.error("updateTabLabels:", e); }
+  try { renderStreakMini(); } catch (e) { console.error("renderStreakMini:", e); }
 
   // 활성 탭에 따라 해당 패널만 렌더링
-  switch (state.activeTab) {
-    case "home":
-      renderHome();
-      break;
-    case "today":
-      if (state.plan) renderToday();
-      break;
-    case "inbox":
-      renderInbox();
-      break;
-    case "history":
-      renderHistory();
-      break;
-    case "settings":
-      renderSettings();
-      break;
+  try {
+    switch (state.activeTab) {
+      case "home":
+        renderHome();
+        break;
+      case "today":
+        if (state.plan) renderToday();
+        break;
+      case "inbox":
+        renderInbox();
+        break;
+      case "history":
+        renderHistory();
+        break;
+      case "settings":
+        renderSettings();
+        break;
+    }
+  } catch (e) {
+    console.error("renderAll tab render:", e);
+    const panel = document.getElementById(state.activeTab);
+    if (panel) {
+      panel.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-icon">⚠️</div>
+          <p>화면 렌더링에 실패했습니다: ${escapeHtml(e.message)}</p>
+          <button class="btn btn-primary" onclick="location.reload()">다시 시도</button>
+        </div>
+      `;
+    }
   }
 }
 
