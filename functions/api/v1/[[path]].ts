@@ -190,6 +190,16 @@ export const onRequest: PagesFunction<Env> = async (context) => {
       return jsonResponse(mapStatus(out), out);
     }
 
+    // ── Notifications ──
+    if (method === "POST" && reqPath === "/api/v1/notifications/subscribe") {
+      const out = await server.notifications.subscribe(authedCtx, body as never);
+      return jsonResponse(mapStatus(out), out);
+    }
+    if (method === "POST" && reqPath === "/api/v1/notifications/unsubscribe") {
+      const out = await server.notifications.unsubscribe(authedCtx, body as never);
+      return jsonResponse(mapStatus(out), out);
+    }
+
     // ── History ──
     if (method === "GET" && reqPath === "/api/v1/history") {
       const type = url.searchParams.get("type") || "all";

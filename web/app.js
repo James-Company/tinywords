@@ -292,6 +292,7 @@ function setTab(tabId) {
   });
 
   // Refresh data when switching tabs
+  if (tabId === "home") { loadDashboardData().then(() => renderHome()); }
   if (tabId === "today") loadTodayData();
   if (tabId === "inbox") refreshInbox();
   if (tabId === "history") refreshHistory();
