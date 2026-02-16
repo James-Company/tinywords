@@ -526,6 +526,16 @@ async function requestSentenceCoach(item) {
   }
 }
 
+async function acceptSentenceAsIs(item) {
+  const sentence = (state.sentenceDrafts[item.planItemId] ?? "").trim();
+  if (!sentence) {
+    showToast(t("errors.sentence_empty"));
+    return;
+  }
+  const feedback = state.sentenceFeedbacks[item.planItemId];
+  await patchItem(item.planItemId, { sentenceStatus: "done", userSentence: sentence, coachFeedback: feedback || null });
+}
+
 async function startRecording(item) {
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
     showToast(t("errors.browser_no_recording"));
@@ -867,6 +877,11 @@ function renderToday() {
             </div>
             ` : ""}
             ${feedback ? renderCoachFeedback(feedback) : ""}
+            ${feedback && feedback.overall !== "good" && item.sentenceStatus !== "done" ? `
+            <div class="actions-row mt-8">
+              <button class="btn btn-tertiary btn-sm" data-item="${item.planItemId}" data-type="sentence-accept">${escapeHtml(t("today.sentence.accept_as_is"))}</button>
+            </div>
+            ` : ""}
           </div>
 
           <!-- Step 3: Speech -->
@@ -979,6 +994,7 @@ function renderToday() {
         if (type === "recall-success") await patchItem(itemId, { recallStatus: "success" });
         else if (type === "recall-fail") await patchItem(itemId, { recallStatus: "fail" });
         else if (type === "coach") await requestSentenceCoach(item);
+        else if (type === "sentence-accept") await acceptSentenceAsIs(item);
         else if (type === "record-save") await saveRecording(item);
         else if (type === "skip-speech") await patchItem(itemId, { speechStatus: "skipped" });
       });

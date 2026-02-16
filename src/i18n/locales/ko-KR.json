@@ -56,6 +56,7 @@
   "today.sentence.label": "문장 만들기 — {lemma}를 활용해 문장을 작성해 보세요.",
   "today.sentence.placeholder": "예: I {lemma} every morning.",
   "today.sentence.coach_btn": "AI 코칭 받기",
+  "today.sentence.accept_as_is": "이대로 완료",
 
   "today.speech.recording": "녹음 중...",
   "today.speech.recorded": "녹음 완료",

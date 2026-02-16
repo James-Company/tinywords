@@ -56,6 +56,7 @@
   "today.sentence.label": "Make a sentence — use {lemma} to write a sentence.",
   "today.sentence.placeholder": "e.g. I {lemma} every morning.",
   "today.sentence.coach_btn": "Get AI Coaching",
+  "today.sentence.accept_as_is": "Accept as-is",
 
   "today.speech.recording": "Recording...",
   "today.speech.recorded": "Recorded",
