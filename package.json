@@ -16,11 +16,15 @@
     "cap:ios": "npm run cap:sync && npx cap open ios",
     "cap:run:android": "npm run cap:sync && npx cap run android",
     "cap:run:ios": "npm run cap:sync && npx cap run ios",
-    "icons": "node scripts/generate-icons.mjs"
+    "icons": "node scripts/generate-icons.mjs",
+    "electron:dev": "npm run build && ELECTRON_RUN_AS_NODE= npx electron electron/main.js",
+    "electron:dist": "npm run build && ELECTRON_RUN_AS_NODE= npx electron-builder --mac --project electron"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
     "@types/web-push": "^3.6.4",
+    "electron": "^33.4.11",
+    "electron-builder": "^26.7.0",
     "tsx": "^4.20.5",
     "typescript": "^5.9.3",
     "wrangler": "^4"

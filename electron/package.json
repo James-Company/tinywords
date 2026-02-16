@@ -1,0 +1,43 @@
+{
+  "name": "tinywords-desktop",
+  "version": "0.1.0",
+  "description": "TinyWords – 하루 조금씩, 내 것으로",
+  "author": "TinyWords",
+  "main": "main.js",
+  "private": true,
+  "build": {
+    "electronVersion": "33.4.11",
+    "appId": "com.tinywords.desktop",
+    "productName": "TinyWords",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js"
+    ],
+    "extraResources": [
+      {
+        "from": "../web",
+        "to": "web",
+        "filter": ["**/*", "!**/.DS_Store"]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.education",
+      "icon": "icon.icns",
+      "target": [
+        { "target": "dmg", "arch": ["universal"] }
+      ],
+      "darkModeSupport": true
+    },
+    "dmg": {
+      "title": "TinyWords",
+      "iconSize": 80,
+      "contents": [
+        { "x": 130, "y": 220 },
+        { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
+      ]
+    }
+  }
+}

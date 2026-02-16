@@ -23,3 +23,7 @@ ios/App/DerivedData/
 ios/App/App.xcworkspace/xcuserdata/
 ios/App/App.xcodeproj/xcuserdata/
 *.xcuserstate
+
+# Electron build artifacts
+electron/dist/
+electron/node_modules/
