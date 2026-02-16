@@ -68,6 +68,11 @@
   "today.speech.skip": "건너뛰기",
   "today.speech.score": "발음 점수: {score}",
 
+  "inbox.stage.d1": "1차 복습",
+  "inbox.stage.d3": "2차 복습",
+  "inbox.stage.d7": "3차 복습",
+  "inbox.stage.custom": "추가 복습",
+
   "coach.overall.good": "👍 좋아요!",
   "coach.overall.needs_fix": "💡 조금 다듬어볼까요",
   "coach.overall.retry": "🔄 다시 시도해보세요",

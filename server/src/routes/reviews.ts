@@ -22,7 +22,7 @@ export function registerReviewRoutes() {
   async function getQueue(ctx: RequestContext): Promise<ApiSuccess<unknown>> {
     const db = getDb();
 
-    // queued 리뷰 + learning_item 정보 조인
+    // queued 리뷰 + learning_item 정보 조인 (due_date가 오늘 이하인 것만)
     const { data: rows } = await db
       .from("review_tasks")
       .select(`
@@ -35,7 +35,8 @@ export function registerReviewRoutes() {
         )
       `)
       .eq("user_id", ctx.userId)
-      .eq("status", "queued");
+      .eq("status", "queued")
+      .lte("due_date", ctx.today);
 
     const tasks = (rows ?? []).map((row: Record<string, unknown>) => toReviewTask(row));
     const sorted = sortQueue(tasks, ctx.today);

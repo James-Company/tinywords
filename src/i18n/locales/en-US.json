@@ -68,6 +68,11 @@
   "today.speech.skip": "Skip",
   "today.speech.score": "Pronunciation: {score}",
 
+  "inbox.stage.d1": "1st review",
+  "inbox.stage.d3": "2nd review",
+  "inbox.stage.d7": "3rd review",
+  "inbox.stage.custom": "Extra review",
+
   "coach.overall.good": "👍 Great!",
   "coach.overall.needs_fix": "💡 Let's refine it a bit",
   "coach.overall.retry": "🔄 Try again",

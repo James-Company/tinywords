@@ -1140,7 +1140,7 @@ function renderInbox() {
       const lemma = planItem?.lemma || task.lemma || task.itemId;
       const meaningKo = planItem?.meaningKo || task.meaningKo || "";
 
-      const stageLabel = task.stage === "d1" ? "D-1" : task.stage === "d3" ? "D-3" : task.stage === "d7" ? "D-7" : "Custom";
+      const stageLabel = t(`inbox.stage.${task.stage}`) || task.stage;
       const dueChip = isOverdue
         ? `<span class="chip chip-overdue">${escapeHtml(t("inbox.chip.overdue"))}</span>`
         : `<span class="chip chip-today">${escapeHtml(t("inbox.chip.today"))}</span>`;
