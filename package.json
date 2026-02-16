@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "tsx server/src/main.ts",
     "dev:cf": "wrangler pages dev web",
-    "build": "mkdir -p web/i18n && cp src/i18n/locales/*.json web/i18n/ && node scripts/generate-config.mjs",
+    "build": "mkdir -p web/i18n web/lib && cp src/i18n/locales/*.json web/i18n/ && cp node_modules/lottie-web/build/player/lottie_light.min.js web/lib/ && node scripts/generate-config.mjs",
     "deploy": "npm run build && wrangler pages deploy web",
     "test": "tsx tests/run.ts",
     "typecheck": "tsc --noEmit",
@@ -37,6 +37,7 @@
     "@capacitor/splash-screen": "^8.0.1",
     "@capacitor/status-bar": "^8.0.1",
     "@supabase/supabase-js": "^2.95.3",
+    "lottie-web": "^5.13.0",
     "openai": "^6.22.0",
     "web-push": "^3.6.7"
   }

@@ -7,6 +7,7 @@ import {
   onAuthStateChange,
   getSession,
   authenticatedFetch,
+  resolveApiUrl,
   initializeUser,
   signInWithEmail,
   signUpWithEmail,
@@ -319,7 +320,6 @@ async function loadDashboardData() {
     hideError();
   } catch (err) {
     showError(t("errors.load_data") + " " + err.message);
-    throw err;
   }
 }
 
@@ -1377,6 +1377,68 @@ async function resetAllData() {
   );
 }
 
+function closeCustomSelect() {
+  const overlay = document.querySelector(".custom-select-overlay");
+  const panel = document.querySelector(".custom-select-panel");
+  if (!overlay || !panel) return;
+
+  document.querySelectorAll(".custom-select.open").forEach((s) => s.classList.remove("open"));
+  panel.classList.remove("visible");
+  overlay.classList.remove("visible");
+  setTimeout(() => { overlay.remove(); panel.remove(); }, 300);
+}
+
+function bindCustomSelect(id, options, onChange) {
+  const wrapper = document.getElementById(id);
+  if (!wrapper) return;
+  const trigger = wrapper.querySelector(".custom-select-trigger");
+
+  trigger.addEventListener("click", () => {
+    const currentValue = wrapper.dataset.value;
+    const title = wrapper.dataset.title || "";
+
+    const overlay = document.createElement("div");
+    overlay.className = "custom-select-overlay";
+
+    const panel = document.createElement("div");
+    panel.className = "custom-select-panel";
+    panel.innerHTML = `
+      <div class="custom-select-panel-header">
+        <span class="custom-select-panel-title">${escapeHtml(title)}</span>
+        <button class="custom-select-panel-close" type="button" aria-label="Close">✕</button>
+      </div>
+      ${options.map((opt) => `
+        <div class="custom-select-option${opt.value === currentValue ? " selected" : ""}" data-value="${escapeHtml(opt.value)}">
+          <span>${escapeHtml(opt.label)}</span>
+          <span class="radio"></span>
+        </div>
+      `).join("")}
+    `;
+
+    document.body.appendChild(overlay);
+    document.body.appendChild(panel);
+
+    requestAnimationFrame(() => {
+      overlay.classList.add("visible");
+      panel.classList.add("visible");
+      wrapper.classList.add("open");
+    });
+
+    overlay.addEventListener("click", closeCustomSelect);
+    panel.querySelector(".custom-select-panel-close").addEventListener("click", closeCustomSelect);
+
+    panel.querySelectorAll(".custom-select-option").forEach((opt) => {
+      opt.addEventListener("click", () => {
+        const val = opt.dataset.value;
+        wrapper.dataset.value = val;
+        trigger.querySelector("span:first-child").textContent = opt.querySelector("span:first-child").textContent;
+        closeCustomSelect();
+        onChange(val);
+      });
+    });
+  });
+}
+
 function renderSettings() {
   const el = document.getElementById("settings");
   const p = state.profile;
@@ -1407,10 +1469,14 @@ function renderSettings() {
 
       <div class="setting-row">
         <span class="setting-label">${escapeHtml(t("settings.language.label"))}</span>
-        <select id="language-select">
-          <option value="ko-KR" ${currentLang === "ko-KR" ? "selected" : ""}>${escapeHtml(t("settings.language.ko"))}</option>
-          <option value="en-US" ${currentLang === "en-US" ? "selected" : ""}>${escapeHtml(t("settings.language.en"))}</option>
-        </select>
+        <div class="custom-select" id="language-select"
+             data-value="${escapeHtml(currentLang)}"
+             data-title="${escapeHtml(t("settings.language.label"))}">
+          <button class="custom-select-trigger" type="button">
+            <span>${currentLang === "ko-KR" ? escapeHtml(t("settings.language.ko")) : escapeHtml(t("settings.language.en"))}</span>
+            <span class="chevron">▼</span>
+          </button>
+        </div>
       </div>
     </div>
 
@@ -1429,22 +1495,26 @@ function renderSettings() {
 
       <div class="setting-row">
         <span class="setting-label">${escapeHtml(t("settings.learning.focus"))}</span>
-        <select id="learning-focus">
-          <option value="travel" ${focus === "travel" ? "selected" : ""}>${escapeHtml(t("settings.learning.focus.travel"))}</option>
-          <option value="business" ${focus === "business" ? "selected" : ""}>${escapeHtml(t("settings.learning.focus.business"))}</option>
-          <option value="exam" ${focus === "exam" ? "selected" : ""}>${escapeHtml(t("settings.learning.focus.exam"))}</option>
-          <option value="general" ${focus === "general" ? "selected" : ""}>${escapeHtml(t("settings.learning.focus.general"))}</option>
-        </select>
+        <div class="custom-select" id="learning-focus"
+             data-value="${escapeHtml(focus)}"
+             data-title="${escapeHtml(t("settings.learning.focus"))}">
+          <button class="custom-select-trigger" type="button">
+            <span>${escapeHtml(t("settings.learning.focus." + focus))}</span>
+            <span class="chevron">▼</span>
+          </button>
+        </div>
       </div>
 
       <div class="setting-row">
         <span class="setting-label">${escapeHtml(t("settings.learning.level"))}</span>
-        <select id="level-select">
-          <option value="A1" ${level === "A1" ? "selected" : ""}>${escapeHtml(t("settings.learning.level.A1"))}</option>
-          <option value="A2" ${level === "A2" ? "selected" : ""}>${escapeHtml(t("settings.learning.level.A2"))}</option>
-          <option value="B1" ${level === "B1" ? "selected" : ""}>${escapeHtml(t("settings.learning.level.B1"))}</option>
-          <option value="B2" ${level === "B2" ? "selected" : ""}>${escapeHtml(t("settings.learning.level.B2"))}</option>
-        </select>
+        <div class="custom-select" id="level-select"
+             data-value="${escapeHtml(level)}"
+             data-title="${escapeHtml(t("settings.learning.level"))}">
+          <button class="custom-select-trigger" type="button">
+            <span>${escapeHtml(t("settings.learning.level." + level))}</span>
+            <span class="chevron">▼</span>
+          </button>
+        </div>
       </div>
     </div>
 
@@ -1512,10 +1582,11 @@ function renderSettings() {
     </div>
   `;
 
-  // Bind language select
-  document.getElementById("language-select").addEventListener("change", (e) => {
-    changeLanguage(e.target.value);
-  });
+  // Bind language select (custom dropdown)
+  bindCustomSelect("language-select", [
+    { value: "ko-KR", label: t("settings.language.ko") },
+    { value: "en-US", label: t("settings.language.en") },
+  ], (val) => changeLanguage(val));
 
   // Bind daily target
   el.querySelectorAll("#daily-target-control .segment").forEach((btn) => {
@@ -1524,15 +1595,21 @@ function renderSettings() {
     });
   });
 
-  // Bind focus
-  document.getElementById("learning-focus").addEventListener("change", (e) => {
-    saveSettings("learning_focus", e.target.value);
-  });
+  // Bind focus (custom dropdown)
+  bindCustomSelect("learning-focus", [
+    { value: "travel", label: t("settings.learning.focus.travel") },
+    { value: "business", label: t("settings.learning.focus.business") },
+    { value: "exam", label: t("settings.learning.focus.exam") },
+    { value: "general", label: t("settings.learning.focus.general") },
+  ], (val) => saveSettings("learning_focus", val));
 
-  // Bind level
-  document.getElementById("level-select").addEventListener("change", (e) => {
-    saveSettings("level", e.target.value);
-  });
+  // Bind level (custom dropdown)
+  bindCustomSelect("level-select", [
+    { value: "A1", label: t("settings.learning.level.A1") },
+    { value: "A2", label: t("settings.learning.level.A2") },
+    { value: "B1", label: t("settings.learning.level.B1") },
+    { value: "B2", label: t("settings.learning.level.B2") },
+  ], (val) => saveSettings("level", val));
 
   // Bind reminder toggle (알림 권한 + 푸시 구독 연동)
   document.getElementById("reminder-toggle").addEventListener("click", async () => {
@@ -1647,9 +1724,10 @@ function renderHome() {
 
   if (!state.profile) {
     el.innerHTML = `
-      <div class="loading-state">
-        <div class="loading-spinner"></div>
+      <div class="empty-state">
+        <div class="empty-icon">📝</div>
         <p>${escapeHtml(t("common.loading"))}</p>
+        <button class="btn btn-primary" onclick="location.reload()">${escapeHtml(t("common.retry"))}</button>
       </div>
     `;
     return;
@@ -1740,6 +1818,7 @@ const onboardingState = {
 };
 
 function showOnboardingScreen() {
+  hideSplash();
   document.getElementById("auth-screen").classList.add("hidden");
   document.getElementById("main-app").classList.add("hidden");
   document.getElementById("onboarding-screen").classList.remove("hidden");
@@ -1878,8 +1957,34 @@ function bindOnboardingUI() {
 // ─── Auth / Main Screen 전환 ───
 // SSOT: docs/22_AUTH_SPEC.md §9.2
 
+const SPLASH_MIN_MS = 3800;
+const splashShownAt = Date.now();
+
+function destroySplashLottie() {
+  if (window.__splashLottie) {
+    window.__splashLottie.destroy();
+    window.__splashLottie = null;
+  }
+}
+
+function hideSplash() {
+  const el = document.getElementById("splash-screen");
+  if (!el || el.classList.contains("hidden")) return;
+
+  const elapsed = Date.now() - splashShownAt;
+  const remaining = Math.max(0, SPLASH_MIN_MS - elapsed);
+
+  setTimeout(() => {
+    el.classList.add("hidden");
+    el.addEventListener("transitionend", () => {
+      destroySplashLottie();
+      el.remove();
+    }, { once: true });
+  }, remaining);
+}
+
 function showAuthScreen() {
-  document.getElementById("splash-screen")?.classList.add("hidden");
+  hideSplash();
   document.getElementById("auth-screen").classList.remove("hidden");
   document.getElementById("main-app").classList.add("hidden");
   resetAuthForms();
@@ -1909,7 +2014,7 @@ function resetAuthForms() {
 }
 
 function showMainApp() {
-  document.getElementById("splash-screen")?.classList.add("hidden");
+  hideSplash();
   document.getElementById("auth-screen").classList.add("hidden");
   document.getElementById("main-app").classList.remove("hidden");
 
@@ -2142,7 +2247,7 @@ function bindAuthUI() {
     }
 
     try {
-      const res = await fetch(url);
+      const res = await fetch(resolveApiUrl(url));
       const html = await res.text();
       // HTML에서 <div class="legal-page">...</div> 본문만 추출
       const match = html.match(/<div class="legal-page">([\s\S]*?)<\/div>\s*<\/body>/);
@@ -2155,7 +2260,7 @@ function bindAuthUI() {
         legalCache[type] = content.trim();
         legalBody.innerHTML = legalCache[type];
       } else {
-        legalBody.innerHTML = `<p>내용을 불러올 수 없습니다. <a href="${url}" target="_blank">새 탭에서 보기</a></p>`;
+        legalBody.innerHTML = `<p>내용을 불러올 수 없습니다. <a href="${resolveApiUrl(url)}" target="_blank">새 탭에서 보기</a></p>`;
       }
     } catch {
       legalBody.innerHTML = `<p>내용을 불러올 수 없습니다. <a href="${url}" target="_blank">새 탭에서 보기</a></p>`;
@@ -2231,14 +2336,30 @@ async function onSignedIn() {
   renderHeader();
   updateTabLabels();
 
-  // 빠른 데이터만 로드 (프로필 + 히스토리, AI 호출 없음)
-  await loadDashboardData();
-
-  // 복원된 탭으로 전환 (데이터 로딩 + 렌더링 포함)
+  // 먼저 탭 전환 (로딩 스피너 표시) → 데이터 로드 → 리렌더링
   setTab(state.activeTab);
+
+  // 빠른 데이터만 로드 (프로필 + 히스토리, AI 호출 없음)
+  try {
+    await loadDashboardData();
+  } catch {
+    // 에러 배너는 loadDashboardData 내부에서 표시됨
+    // 여기서는 앱 전체가 멈추지 않도록 catch
+  }
+
+  // 데이터 로드 후 현재 탭 리렌더링
+  renderAll();
 }
 
 async function main() {
+  // iOS StatusBar 스타일 설정 (Android는 MainActivity.java에서 네이티브 처리)
+  if (window.Capacitor?.getPlatform?.() === "ios") {
+    try {
+      const { StatusBar } = window.Capacitor.Plugins;
+      await StatusBar.setStyle({ style: "LIGHT" });
+    } catch { /* StatusBar plugin not available */ }
+  }
+
   // Initialize i18n before anything else
   await initI18n();
 

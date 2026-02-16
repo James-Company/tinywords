@@ -52,6 +52,9 @@ loadEnvFile(resolve(ROOT, ".env.development")); // fallback
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || "";
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || "";
+// 네이티브 앱(Capacitor)에서 API 호출 시 사용할 원격 서버 origin.
+// 웹에서는 빈 문자열(같은 origin에서 상대 경로로 동작).
+const API_ORIGIN = process.env.API_ORIGIN || "";
 
 if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
   console.warn(
@@ -63,6 +66,7 @@ const content = `// Auto-generated at build time — do not edit manually
 export const SUPABASE_URL = ${JSON.stringify(SUPABASE_URL)};
 export const SUPABASE_ANON_KEY = ${JSON.stringify(SUPABASE_ANON_KEY)};
 export const VAPID_PUBLIC_KEY = ${JSON.stringify(VAPID_PUBLIC_KEY)};
+export const API_ORIGIN = ${JSON.stringify(API_ORIGIN)};
 `;
 
 writeFileSync("web/config.js", content, "utf-8");

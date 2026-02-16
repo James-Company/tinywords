@@ -14,7 +14,7 @@ import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 // 개발/프로덕션 환경에 따라 올바른 Supabase 프로젝트가 자동 선택된다.
 // SUPABASE_ANON_KEY는 공개 키이므로 클라이언트에 노출해도 안전하다.
 // RLS가 데이터 보안을 담당한다.
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js";
+import { SUPABASE_URL, SUPABASE_ANON_KEY, API_ORIGIN } from "./config.js";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -177,6 +177,30 @@ export async function resetPassword(email) {
 // ─── API 호출 헬퍼 (토큰 자동 주입) ───
 
 /**
+ * API 경로를 전체 URL로 변환한다.
+ * 웹 환경(같은 origin)에서는 상대 경로 그대로 사용.
+ * Capacitor 네이티브 환경에서는 API_ORIGIN을 앞에 붙여 원격 서버로 요청.
+ * Android 에뮬레이터에서 localhost → 10.0.2.2 자동 치환.
+ */
+export function resolveApiUrl(path) {
+  if (path.startsWith("http")) return path;
+  let origin = API_ORIGIN || "";
+  if (!origin) return path;
+
+  // Android 에뮬레이터에서 localhost는 에뮬레이터 자체를 가리킴
+  // 호스트 머신 접근 시 10.0.2.2 사용 필요
+  if (
+    typeof window !== "undefined" &&
+    window.Capacitor?.getPlatform?.() === "android" &&
+    origin.includes("localhost")
+  ) {
+    origin = origin.replace("localhost", "10.0.2.2");
+  }
+
+  return `${origin}${path}`;
+}
+
+/**
  * 인증된 API 호출. Bearer 토큰을 자동 주입한다.
  * 401 응답 시 세션 갱신을 시도한다.
  */
@@ -187,6 +211,8 @@ export async function authenticatedFetch(path, options = {}) {
     throw new Error("AUTH_REQUIRED");
   }
 
+  const url = resolveApiUrl(path);
+
   const headers = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${token}`,
@@ -196,7 +222,7 @@ export async function authenticatedFetch(path, options = {}) {
     ...options.headers,
   };
 
-  let res = await fetch(path, { ...options, headers });
+  let res = await fetch(url, { ...options, headers });
 
   // 401인 경우 세션 갱신 시도 후 재요청
   if (res.status === 401) {
@@ -206,7 +232,7 @@ export async function authenticatedFetch(path, options = {}) {
     }
     _currentSession = data.session;
     headers.Authorization = `Bearer ${data.session.access_token}`;
-    res = await fetch(path, { ...options, headers });
+    res = await fetch(url, { ...options, headers });
   }
 
   const json = await res.json();

@@ -2,7 +2,7 @@
 <html lang="ko">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>TinyWords</title>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📝</text></svg>" />
     <link rel="manifest" href="/manifest.json" />
@@ -12,13 +12,15 @@
     <meta name="apple-mobile-web-app-title" content="TinyWords" />
     <link rel="apple-touch-icon" href="/icons/icon-192x192.png" />
     <link rel="stylesheet" href="/styles.css" />
+    <script src="/lib/lottie_light.min.js"></script>
   </head>
   <body>
     <!-- ═══ Splash (세션 확인 중) ═══ -->
-    <div id="splash-screen" class="auth-screen" style="display:flex;align-items:center;justify-content:center;min-height:100vh;">
-      <div style="text-align:center;">
-        <h1 class="brand">TinyWords</h1>
-        <p class="sub" style="margin-top:8px;color:var(--text-secondary);">잠시만요...</p>
+    <div id="splash-screen" class="splash-screen">
+      <div class="splash-content">
+        <p class="splash-tagline-ko">조금씩 계속</p>
+        <div id="splash-lottie" class="splash-lottie"></div>
+        <h1 class="splash-brand">TinyWords</h1>
       </div>
     </div>
 
@@ -314,6 +316,21 @@
       </div>
     </div>
 
+    <script>
+      window.__splashLottie = null;
+      (function initSplashLottie() {
+        var el = document.getElementById("splash-lottie");
+        if (el && typeof lottie !== "undefined") {
+          window.__splashLottie = lottie.loadAnimation({
+            container: el,
+            renderer: "svg",
+            loop: true,
+            autoplay: true,
+            path: "/lottie/splash.json"
+          });
+        }
+      })();
+    </script>
     <script type="module" src="/app.js"></script>
   </body>
 </html>

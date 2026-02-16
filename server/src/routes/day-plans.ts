@@ -165,7 +165,7 @@ export function registerDayPlanRoutes() {
 
     const words = wordRows ?? [];
 
-    // day_plan 생성
+    // day_plan 생성 (동시 요청 시 유니크 제약 충돌 대비)
     const { data: newPlan, error: planErr } = await db
       .from("day_plans")
       .insert({
@@ -178,6 +178,30 @@ export function registerDayPlanRoutes() {
       .single();
 
     if (planErr || !newPlan) {
+      // 유니크 제약 충돌(동시 요청) → 기존 plan 재조회
+      const { data: existingPlan } = await db
+        .from("day_plans")
+        .select("*")
+        .eq("user_id", ctx.userId)
+        .eq("plan_date", ctx.today)
+        .single();
+
+      if (existingPlan) {
+        const { data: existingItems } = await db
+          .from("plan_items")
+          .select("*")
+          .eq("plan_id", existingPlan.id)
+          .order("order_num");
+
+        const plan = toDayPlan(existingPlan, existingItems ?? []);
+        const itemIds = (existingItems ?? []).map((r: Record<string, unknown>) => r.id as string);
+        const [speechAttempts, savedSentences] = await Promise.all([
+          fetchSpeechAttempts(itemIds),
+          fetchSentenceAttempts(itemIds),
+        ]);
+        return ok(ctx.requestId, { ...plan, speechAttempts, savedSentences });
+      }
+
       return fail(ctx.requestId, "INTERNAL_ERROR", "failed to create day plan");
     }
 
