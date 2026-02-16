@@ -39,6 +39,7 @@
   "today.summary.completed": "Today's done! Review your words in Inbox.",
   "today.completion.title": "You completed today's learning!",
   "today.completion.go_inbox": "Review in Inbox",
+  "today.completion.add_extra": "Study More",
   "today.complete_btn": "Complete Today's Learning",
   "today.complete_btn_progress": "{done}/{total} — complete all items first",
 
@@ -194,5 +195,7 @@
 
   "today.toast.completed": "Today's learning complete! Check your reviews too.",
   "today.toast.not_ready": "Not ready yet. Please complete all items.",
-  "today.toast.score": "Pronunciation score: {score}"
+  "today.toast.score": "Pronunciation score: {score}",
+  "today.toast.extra_added": "New words added! Keep learning.",
+  "today.toast.extra_fail": "Couldn't add extra items. Please try again."
 }

@@ -284,6 +284,11 @@ body {
   margin-bottom: var(--space-12);
   background: var(--bg-surface);
   box-shadow: var(--shadow-card);
+  transition: box-shadow 0.3s, border-color 0.3s;
+}
+.card-highlight {
+  border-color: var(--brand-primary);
+  box-shadow: 0 0 0 2px var(--brand-primary), var(--shadow-card);
 }
 .card-header {
   display: flex;
@@ -455,6 +460,14 @@ body {
   color: var(--state-success);
   font-size: 14px;
   margin-bottom: var(--space-12);
+}
+.completion-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+.completion-actions .btn {
+  width: 100%;
 }
 
 /* === Compose area (sentence) === */
@@ -690,9 +703,20 @@ audio {
 .detail-row {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   padding: var(--space-4) 0;
   font-size: 14px;
+  gap: var(--space-8);
+}
+.detail-row > div:first-child {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+.detail-row > div:last-child {
+  flex-shrink: 0;
+  white-space: nowrap;
+  text-align: right;
 }
 
 /* === Settings === */

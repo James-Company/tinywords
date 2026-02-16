@@ -493,6 +493,21 @@ async function completeToday() {
   }
 }
 
+async function addExtraItems() {
+  try {
+    const planRes = await api(`/api/v1/day-plans/${state.plan.planId}/add-items`, { method: "POST" });
+    state.plan = planRes;
+    todayLoaded = true;
+    await restoreRecordingsFromServer(planRes);
+    restoreSentencesFromServer(planRes);
+    restoreFeedbacksFromServer(planRes);
+    renderToday();
+    showToast(t("today.toast.extra_added"));
+  } catch (err) {
+    showToast(t("today.toast.extra_fail"));
+  }
+}
+
 async function requestSentenceCoach(item) {
   const sentence = (state.sentenceDrafts[item.planItemId] ?? "").trim();
   if (!sentence) {
@@ -780,7 +795,10 @@ function renderToday() {
       <div class="completion-panel">
         <h3>${escapeHtml(t("today.completion.title"))}</h3>
         <p>${escapeHtml(summaryCopy)}</p>
-        <button class="btn btn-primary" onclick="setTab('inbox')">${escapeHtml(t("today.completion.go_inbox"))}</button>
+        <div class="completion-actions">
+          <button class="btn btn-primary" onclick="setTab('inbox')">${escapeHtml(t("today.completion.go_inbox"))}</button>
+          <button class="btn btn-secondary" id="add-extra-items">${escapeHtml(t("today.completion.add_extra"))}</button>
+        </div>
       </div>
     `;
   }
@@ -1010,6 +1028,9 @@ function renderToday() {
 
   const completeBtn = document.getElementById("complete-day");
   if (completeBtn) completeBtn.addEventListener("click", () => withLoading(completeBtn, completeToday));
+
+  const extraBtn = document.getElementById("add-extra-items");
+  if (extraBtn) extraBtn.addEventListener("click", () => withLoading(extraBtn, addExtraItems));
 }
 
 function renderCoachFeedback(feedback) {
@@ -1178,7 +1199,10 @@ function renderInbox() {
 
 function scrollToFirstReview() {
   const first = document.querySelector("[id^='review-']");
-  if (first) first.scrollIntoView({ behavior: "smooth", block: "start" });
+  if (!first) return;
+  first.scrollIntoView({ behavior: "smooth", block: "start" });
+  first.classList.add("card-highlight");
+  setTimeout(() => first.classList.remove("card-highlight"), 1500);
 }
 
 // ─── History Screen (docs/07) ───

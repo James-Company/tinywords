@@ -243,6 +243,13 @@ export function startHttpServer(port = 8080) {
           return;
         }
 
+        const planAddItemsMatch = reqPath.match(/^\/api\/v1\/day-plans\/([^/]+)\/add-items$/);
+        if (method === "POST" && planAddItemsMatch) {
+          const out = await app.dayPlans.addExtraItems(authedCtx, planAddItemsMatch[1]);
+          sendJson(res, mapStatus(out), out);
+          return;
+        }
+
         // Reviews / Inbox
         if (method === "GET" && reqPath === "/api/v1/reviews/queue") {
           const out = await app.reviews.getQueue(authedCtx);

@@ -473,7 +473,178 @@ export function registerDayPlanRoutes() {
     });
   }
 
-  return { getTodayDayPlan, patchPlanItem, completePlan };
+  async function addExtraItems(
+    ctx: RequestContext,
+    planId: string,
+  ): Promise<ApiSuccess<DayPlan> | ApiError> {
+    const db = getDb();
+
+    // 플랜 소유자 확인
+    const { data: planRow } = await db
+      .from("day_plans")
+      .select("*")
+      .eq("id", planId)
+      .eq("user_id", ctx.userId)
+      .single();
+
+    if (!planRow) {
+      return fail(ctx.requestId, "NOT_FOUND", "plan not found");
+    }
+
+    // 완료된 플랜에서만 추가 학습 가능
+    if (planRow.status !== "completed") {
+      return fail(ctx.requestId, "VALIDATION_ERROR", "plan must be completed first");
+    }
+
+    // 유저 프로필에서 설정 가져오기
+    const { data: profile } = await db
+      .from("user_profiles")
+      .select("daily_target, level, learning_focus")
+      .eq("user_id", ctx.userId)
+      .single();
+
+    const dailyTarget = (profile?.daily_target ?? 3) as 3 | 4 | 5;
+    const level = (profile?.level as string) ?? "A2";
+    const learningFocus = (profile?.learning_focus as string) ?? "travel";
+
+    // 이전 학습 이력 수집 (AI 컨텍스트용)
+    const knownWords = await collectKnownWords(ctx.userId);
+    const recentWords = await collectRecentWords(ctx.userId);
+
+    let learningItemIds: string[] = [];
+
+    try {
+      const result = await generateWords({
+        daily_target: dailyTarget,
+        level,
+        learning_focus: learningFocus,
+        known_words_hint: knownWords,
+        avoid_words: recentWords,
+        reason: "extra_study",
+      });
+
+      const learningItems = toLeajaItems(result.items);
+
+      const insertRows = learningItems.map((item) => ({
+        user_id: ctx.userId,
+        item_type: item.itemType,
+        lemma: item.lemma,
+        meaning_ko: item.meaningKo,
+        part_of_speech: item.partOfSpeech,
+        example_en: item.exampleEn,
+        example_ko: item.exampleKo,
+        source: item.source,
+        is_active: true,
+      }));
+
+      const { data: inserted } = await db
+        .from("learning_items")
+        .insert(insertRows)
+        .select("id");
+
+      learningItemIds = (inserted ?? []).map((r: Record<string, unknown>) => r.id as string);
+    } catch (err) {
+      console.warn("[day-plans] AI generation failed for extra items, falling back:", err);
+      const fallbackWords = pickFallbackWords(dailyTarget, recentWords);
+
+      const insertRows = fallbackWords.map((w) => ({
+        user_id: ctx.userId,
+        item_type: w.item_type,
+        lemma: w.lemma,
+        meaning_ko: w.meaning_ko,
+        part_of_speech: w.part_of_speech,
+        example_en: w.example_en,
+        example_ko: w.example_ko,
+        source: "ai_generated",
+        is_active: true,
+      }));
+
+      const { data: inserted } = await db
+        .from("learning_items")
+        .insert(insertRows)
+        .select("id");
+
+      learningItemIds = (inserted ?? []).map((r: Record<string, unknown>) => r.id as string);
+    }
+
+    // 새 learning_items 조회
+    const { data: wordRows } = await db
+      .from("learning_items")
+      .select("*")
+      .in("id", learningItemIds);
+
+    const words = wordRows ?? [];
+
+    // 기존 plan_items의 최대 order_num 조회
+    const { data: existingItems } = await db
+      .from("plan_items")
+      .select("order_num")
+      .eq("plan_id", planId)
+      .order("order_num", { ascending: false })
+      .limit(1);
+
+    const maxOrder = existingItems?.[0]?.order_num as number ?? 0;
+
+    // 새 plan_items 추가
+    const planItemRows = words.map((w: Record<string, unknown>, i: number) => ({
+      plan_id: planId,
+      user_id: ctx.userId,
+      learning_item_id: w.id,
+      item_type: w.item_type,
+      lemma: w.lemma,
+      meaning_ko: w.meaning_ko,
+      part_of_speech: w.part_of_speech ?? "",
+      example_en: w.example_en ?? "",
+      example_ko: w.example_ko ?? "",
+      recall_status: "pending",
+      sentence_status: "pending",
+      speech_status: "pending",
+      is_completed: false,
+      order_num: maxOrder + i + 1,
+    }));
+
+    await db.from("plan_items").insert(planItemRows);
+
+    // 플랜 상태를 open으로 변경 (추가 학습 진행을 위해)
+    await db
+      .from("day_plans")
+      .update({ status: "open", completed_at: null })
+      .eq("id", planId);
+
+    // 이벤트 기록
+    await db.from("activity_events").insert({
+      user_id: ctx.userId,
+      event_name: "extra_study_started",
+      entity_type: "day_plan",
+      entity_id: planId,
+      payload: { plan_id: planId, extra_count: words.length },
+      occurred_at: ctx.nowIso,
+    });
+
+    // 최신 플랜 전체 조회
+    const { data: updatedPlanRow } = await db
+      .from("day_plans")
+      .select("*")
+      .eq("id", planId)
+      .single();
+
+    const { data: allItems } = await db
+      .from("plan_items")
+      .select("*")
+      .eq("plan_id", planId)
+      .order("order_num");
+
+    const plan = toDayPlan(updatedPlanRow!, allItems ?? []);
+    const itemIds = (allItems ?? []).map((r: Record<string, unknown>) => r.id as string);
+    const [speechAttempts, sentenceData] = await Promise.all([
+      fetchSpeechAttempts(itemIds),
+      fetchSentenceAttempts(itemIds),
+    ]);
+
+    return ok(ctx.requestId, { ...plan, speechAttempts, savedSentences: sentenceData.sentences, savedFeedbacks: sentenceData.feedbacks });
+  }
+
+  return { getTodayDayPlan, patchPlanItem, completePlan, addExtraItems };
 }
 
 // ── Speech Attempts 조회 헬퍼 ────────────────────────────────

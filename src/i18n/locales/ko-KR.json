@@ -39,6 +39,7 @@
   "today.summary.completed": "오늘 학습 완료! Inbox에서 복습해요.",
   "today.completion.title": "오늘 학습을 완료했어요!",
   "today.completion.go_inbox": "Inbox에서 복습하기",
+  "today.completion.add_extra": "추가 학습하기",
   "today.complete_btn": "오늘 학습 완료하기",
   "today.complete_btn_progress": "{done}/{total} — 모든 항목을 완료해주세요",
 
@@ -194,5 +195,7 @@
 
   "today.toast.completed": "오늘 학습 완료! 복습도 확인해보세요.",
   "today.toast.not_ready": "아직 완료할 수 없어요. 모든 항목을 마무리해주세요.",
-  "today.toast.score": "발음 점수: {score}점"
+  "today.toast.score": "발음 점수: {score}점",
+  "today.toast.extra_added": "새로운 단어가 추가됐어요! 이어서 학습해보세요.",
+  "today.toast.extra_fail": "추가 학습을 준비하지 못했어요. 다시 시도해주세요."
 }
