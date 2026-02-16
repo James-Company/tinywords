@@ -144,7 +144,8 @@ export function startHttpServer(port = 8080) {
         const supabaseUrl = process.env.SUPABASE_URL ?? "";
         const supabaseAnonKey = process.env.SUPABASE_ANON_KEY ?? "";
         const vapidPublicKey = process.env.VAPID_PUBLIC_KEY ?? "";
-        const js = `// Auto-generated from server environment\nexport const SUPABASE_URL = ${JSON.stringify(supabaseUrl)};\nexport const SUPABASE_ANON_KEY = ${JSON.stringify(supabaseAnonKey)};\nexport const VAPID_PUBLIC_KEY = ${JSON.stringify(vapidPublicKey)};\n`;
+        const apiOrigin = process.env.API_ORIGIN ?? "";
+        const js = `// Auto-generated from server environment\nexport const SUPABASE_URL = ${JSON.stringify(supabaseUrl)};\nexport const SUPABASE_ANON_KEY = ${JSON.stringify(supabaseAnonKey)};\nexport const VAPID_PUBLIC_KEY = ${JSON.stringify(vapidPublicKey)};\nexport const API_ORIGIN = ${JSON.stringify(apiOrigin)};\n`;
         res.writeHead(200, {
           "content-type": "text/javascript; charset=utf-8",
           "cache-control": "no-cache",

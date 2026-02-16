@@ -9,6 +9,7 @@ interface Env {
   SUPABASE_URL?: string;
   SUPABASE_ANON_KEY?: string;
   VAPID_PUBLIC_KEY?: string;
+  API_ORIGIN?: string;
 }
 
 export const onRequest: PagesFunction<Env> = async (context) => {
@@ -20,6 +21,7 @@ export const onRequest: PagesFunction<Env> = async (context) => {
 export const SUPABASE_URL = ${JSON.stringify(env.SUPABASE_URL || "")};
 export const SUPABASE_ANON_KEY = ${JSON.stringify(env.SUPABASE_ANON_KEY || "")};
 export const VAPID_PUBLIC_KEY = ${JSON.stringify(env.VAPID_PUBLIC_KEY || "")};
+export const API_ORIGIN = ${JSON.stringify(env.API_ORIGIN || "")};
 `;
     return new Response(js, {
       headers: {
